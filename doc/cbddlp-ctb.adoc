@@ -1,0 +1,605 @@
+:toc:
+
+= CTB/CBDDLP file formats
+
+This document describes the file layout and record format for the `ctb` and
+`cbddlp` filetypes. The two formats have a lot in common, so first we'll cover
+the common elements, and then talk about specifics.
+
+== Background
+
+I was evaluating 3D resin printers to see if I could generate my own files for
+any of them. (I'm used to being able to do so, from filament printers.) It turns
+out that the low end printers all have proprietary file formats. I collected
+samples of as many as I could, and settled on the `cbddlp` and `ctb` formats for
+analysis, eventually acquiring a Creality LD-002R once I was confident I had
+broken the `ctb` format.
+
+This information has been tested in practice with the Creality LD-002R, and by
+round-tripping files intended for the older Elegoo Mars (`cbddlp`).
+
+== High-level structure
+
+A file consists of a predictable set of sections:
+
+- A file header and two header extension records, which together describe the
+  contents of the file and the targeted printer.
+- Two preview images, which are displayed on the printer's screen when choosing
+  files.
+- A table of layer headers, describing the layer data.
+- A bunch of blobs of layer data, which give the actual cross-sections of the
+  design that should be projected into resin at each step.
+
+The precise details vary. In particular, the `ctb` and `cbddlp` formats use
+different methods for encoding layer data.
+
+== Common encoding details
+
+Most fields are 32 bits wide, though some are 16. In either case, all multi-byte
+fields are represented in little-endian.
+
+Many of the 32-bit fields contain single-precision IEEE754 floats.
+
+Alignment is not significant -- many of the sections can contain an odd number
+of bytes, and the next section starts right after without padding.
+
+Sections reference one another by _offset,_ measured in bytes from the start of
+the file. Some section references also include a size, either because the target
+is variable length (e.g. the layer table), or because the target appears to
+allow for future expansion (e.g. `ExtConfig`).
+
+Physical quantities are measured in the metric system, mostly in
+millimeters/grams/seconds. I've marked each field with its units.
+
+== The header
+
+The header consists of three parts: a fixed header record at offset 0, and two
+extension records that can appear anywhere in the file. 
+
+NOTE: My guess is that the fixed header came first, and the other two parts
+were added as later extensions -- which is why I refer to them as extension
+records.
+
+Because the three parts are split somewhat haphazardly, I'll present the layout
+for all three records before discussing their fields in detail.
+
+[cols="1,3,3,6,6,6"]
+.File header layout
+|===
+|
+2+| x0
+| x4
+| x8
+| xC
+
+|0x
+2+|`magic`
+|`version`
+|`printer_out_mm.x`
+|`printer_out_mm.y`
+
+|1x
+2+|`printer_out_mm.z`
+2+|(zeroes)
+|`overall_height_mm`
+
+|2x
+2+|`layer_height_mm`
+|`exposure_s`
+|`bot_exposure_s`
+|`light_off_time_s`
+
+|3x
+2+|`bot_layer_count`
+|`resolution.x`
+|`resolution.y`
+|`large_preview_offset`
+
+|4x
+2+|`layer_table_offset`
+|`layer_table_count`
+|`small_preview_offset`
+|`print_time_s`
+
+|5x
+2+|`projection`
+|`ext_config_offset`
+|`ext_config_size`
+|`level_set_count`
+
+|6x
+|`pwm_level`
+|`bot_pwm_level`
+|`encryption_key`
+|`ext_config2_offset`
+|`ext_config2_size`
+
+|===
+
+[cols="1,6,6,6,6"]
+.`ExtConfig` layout
+|===
+|
+| x0
+| x4
+| x8
+| xC
+
+|0x
+|`bot_lift_dist_mm`
+|`bot_lift_speed_mmpm`
+|`lift_dist_mm`
+|`lift_speed_mmpm`
+
+|1x
+|`retract_speed_mmpm`
+|`resin_volume_ml`
+|`resin_mass_g`
+|`resin_cost`
+
+|2x
+|`bot_light_off_time_s`
+|`light_off_time_s`
+|`bot_layer_count`
+|padding?
+
+|3x
+3+|padding?
+|
+
+|===
+
+[cols="1,6,6,6,6"]
+.`ExtConfig2` layout
+|===
+|
+| x0
+| x4
+| x8
+| xC
+
+|0x
+4+|zeroes
+
+|1x
+3+|zeroes
+|`machine_type_offset`
+
+|2x
+|`machine_type_len`
+|`encryption_mode`
+|`mysterious_id`
+|`antialias_level`
+
+|3x
+|`software_version`
+|unknown `0x200`
+2+|padding?
+
+|4x
+3+|padding?
+|
+
+|===
+
+
+Field definitions:
+
+`magic` (`u32`): a magic number identifying the file type.
+
+- `0x12fd_0019` for `cbddlp`
+- `0x12fd_0086` for `ctb`
+
+`version` (`u32`): always 2. (I'm guessing that this is a version, but I've
+never seen any other value.)
+
+`printer_out_mm.{x, y, z}` (`f32`): dimensions of the printer's output volume,
+in millimeters.
+
+`overall_height_mm` (`f32`): height of the model described by this file, in
+millimeters.
+
+`layer_height_mm` (`f32`): layer height setting used at slicing, in millimeters.
+Actual height used by the machine is in the layer table.
+
+`exposure_s` / `bot_exposure_s` (`f32`): exposure time setting used at slicing, in
+seconds, for normal (non-bottom) and bottom layers, respectively. Actual time
+used by the machine is in the layer table.
+
+`light_off_time_s` / `bot_light_off_time_s` (`f32`): light off time setting used
+at slicing, for normal and bottom layers (respectively), in seconds. Actual
+time used by the machine is in the layer table. Note that `light_off_time_s`
+appears in *both* the file header and `ExtConfig`.
+
+`bot_layer_count` (`u32`): number of layers configured as "bottom." Note that
+this field appears in *both* the file header and `ExtConfig`.
+
+`resolution.{x,y}` (`f32`): printer resolution along X/Y axes, in pixels. This
+information is critical to correctly decoding layer images.
+
+`large_preview_offset` / `small_preview_offset` (`u32`): file offsets of
+`ImageHeader` records describing the larger and smaller preview images,
+respectively.
+
+`layer_table_offset` (`u32`): file offset of a table of `LayerHeader` records
+giving parameters for each printed layer.
+
+`layer_table_count` (`u32`): number of records in the layer table _for the first
+level set._ In `ctb` files, that's equivalent to the total number of records,
+but records may be multiplied in antialiased `cbddlp` files.
+
+`print_time_s` (`u32`): estimated duration of print, in seconds.
+
+`projection` (`u32`): records whether this file was generated assuming normal
+(0) or mirrored (1) image projection. LCD printers are "mirrored" for this
+purpose.
+
+`ext_config_offset` / `ext_config_size` (`u32`): file offset to the `ExtConfig`
+record and its size in bytes.
+
+`level_set_count` (`u32`): number of times each layer image is repeated in the
+file. This is used to implement antialiasing in `cbddlp` files. When greater
+than 1, the layer table will _actually_ contain `layer_table_count *
+level_set_count` entries. See the section on antialiasing for details.
+
+`pwm_level` / `bot_pwm_level` (`u16`): PWM duty cycle for the UV illumination
+source on normal and bottom levels, respectively. This appears to be an 8-bit
+quantity where `0xFF` is fully on and `0x00` is fully off.
+
+`encryption_key` (`u32`): key used to encrypt layer data, or `0` if encryption
+is not used.
+
+`ext_config2_offset` / `ext_config2_size` (`u32`): file offset to the
+`ExtConfig2` record and its size in bytes.
+
+`lift_dist_mm` / `bot_lift_dist_mm` (`f32`): distance to lift the build platform
+away from the vat after normal and bottom layers, respectively, in millimeters.
+
+`lift_speed_mmpm` / `bot_lift_speed_mmpm` (`f32`): speed at which to lift the
+build platform away from the vat after normal and bottom layers, respectively,
+in millimeters per minute.
+
+`retract_speed_mmpm` (`f32`): speed to use when the build platform re-approaches
+the vat after lift, in millimeters per minute.
+
+`resin_volume_ml` / `resin_mass_g` / `resin_cost` (`f32`): estimated required
+resin, measured in milliliters, grams, and whatever currency unit the user had
+configured. The volume number is derived from the model, and the other two are
+derived from volume using configured factors for density and cost (not stored in
+the file).
+
+`machine_type_offset` / `machine_type_len` (`u32`): file offset to a string
+naming the machine type, and its length in bytes. The string is not
+nul-terminated. The character encoding is currently unknown -- all observed
+files in the wild use 7-bit ASCII characters only. Note that the machine type
+here is set in the software profile, and is *not* the name the user assigned to
+the machine.
+
+`encryption_mode` (`u32`): parameters used to control encryption. Not totally
+understood. `0` for `cbddlp` files, `0xF` for `ctb` files.
+
+`mysterious_id` (`u32`): a number that increments with time or number of models
+sliced, or both. Zeroing it in output seems to have no effect. Possibly a user
+tracking bug.
+
+`antialias_level` (`u32`): the user-selected antialiasing level. For `cbddlp`
+files this will match the `level_set_count`. For `ctb` files, this number is
+essentially arbitrary.
+
+`software_version` (`u32`): version of software that generated this file,
+encoded with major, minor, and patch release in bytes starting from the MSB
+down. (No provision is made to _name_ the software being used, so this assumes
+that only one software package can generate the files. Probably best to hardcode
+it at `0x01060300`.)
+
+== Preview images
+
+The files contain two preview images. These are shown on the printer display
+when choosing which file to print, sparing the poor printer from needing to
+render a 3D image from scratch.
+
+Each image consists of an `ImageHeader` record, referenced from the file header,
+and an encoded data blob. The encoding is consistent in both file formats.
+
+[cols="1,6,6,6,6"]
+.`ImageHeader` layout
+|===
+|
+| x0
+| x4
+| x8
+| xC
+
+|0x
+|`size.x`
+|`size.y`
+|`data_offset`
+|`data_len`
+
+|1x
+4+|zeroes
+
+|===
+
+`size.{x,y}` (`u32`): dimensions of the preview image, in pixels. In all files
+observed in the wild, the "large" image is 400x300, and the "small" image is
+200x125.  (Meaning they are not the same aspect ratio, and you can't simply
+scale one to produce the other.)
+
+`data_offset` / `data_len` (`u32`): file offset of the encoded data blob, and
+its length in bytes.
+
+=== Preview image data encoding
+
+Preview images are stored in raster order in RGB565 format, but with the LSB of
+the green channel reappropriated to store metadata. That is, each pixel is 16
+bits, with the following format:
+
+- bits 15:11: red
+- bits 10:6: green
+- bit 5: *run flag*
+- bits 4:0: blue
+
+The *run flag* indicates whether the 16-bit value encodes a single pixel (0) or
+a run of pixels (1). In the latter case, the pixel is immediately followed by
+another 16-bit value encoding the run length.
+
+The run length word is always of the form `0x3nnn`: its top nibble is always 3,
+and the encoded run length gets 12 bits. Proprietary software limits the run
+length to `0xffe`, and it's not clear why; Catibo does not.
+
+This encoding is referred to as `RLE15` in the Catibo sources.
+
+NOTE: Runs will _happily_ span across rows of the image. If a run reaches the
+right hand side of a line, it wraps to the left hand side of the next.
+
+NOTE: The run length gives the number of copies of the pixel to follow the
+first, so `0x3000` is equivalent to not having a run.
+
+Examples:
+
+- `0xFFDF` encodes a single white pixel.
+- `0xFFFF 0x302A` encodes a run of 42 white pixels.
+- `0xFFFF 0x3000` encodes a single white pixel in a strange way.
+
+== The layer table
+
+The layer table contains `LayerHeader` records. The number of records can be
+computed from information in the file header. Each record is 36 bytes long, with
+the final 16 bytes apparently reserved for expansion.
+
+IMPORTANT: Each record in the table provides _independent_ values for the
+platform Z position and exposure/off times. The machine appears to follow these
+numbers, rather than the settings stored in the file header.
+
+[cols="1,6,6,6,6"]
+.`LayerHeader` layout
+|===
+|
+| x0
+| x4
+| x8
+| xC
+
+|0x
+|`z`
+|`exposure_s`
+|`light_off_time_s`
+|`data_offset`
+
+|1x
+|`data_len`
+3+|zeroes
+
+|2x
+|zeroes
+3+|
+
+|===
+
+Fields:
+
+`z` (`f32`): the build platform Z position for this layer, measured in
+millimeters. 
+
+`exposure_s` (`f32`): exposure time for this layer, in seconds.
+
+`light_off_time_s` (`f32`): how long to keep the light off after exposing this
+layer, in seconds.
+
+`data_offset` / `data_len` (`u32`): file offset to encoded layer data, and its
+length in bytes.
+
+=== `cbddlp` layer data encoding
+
+Let's discuss the non-anti-aliased case first.
+
+A layer in a non-anti-aliased `cbddlp` file consists of a raster-order bilevel
+image (i.e. 1 bit per pixel) where exposed/filled areas are `1` and masked/empty
+areas are `0`. This is essentially a set of places in the layer where the "fill
+level" of voxels crosses a certain threshold, which is why I will occasionally
+refer to it as a *level set* for precision.
+
+Layer data is RLE-encoded, one run per byte:
+
+- Bit 7 (MSB) of the byte gives the pixel value.
+- Bits 6:0 of the byte give the run length.
+
+Examples:
+
+- `0x81` encodes a single `1` pixel.
+- `0x8F` encodes 15 `1` pixels.
+- `0x0F` encodes 15 `0` pixels.
+- `0x80` encodes zero `1` pixels and has undefined behavior.
+
+This scheme is referred to as `RLE1` in the Catibo sources.
+
+NOTE: Proprietary software limits the run length to `0x7d`, i.e. 125 bytes. The
+reason for this is not clear. 
+
+NOTE: Runs will _happily_ cross the end of scanlines, in which case they wrap
+back to the start of the next line.
+
+=== `cbddlp` with antialiasing
+
+And now, the level set vs layer distinction becomes material.
+
+An antialiased `cbddlp` file is described by its "AA levels," an integer
+typically between 2 and 4. You might assume that this indicates the number of
+bits per pixel, but you would be wrong.
+
+An N-level antialiased `cbddlp` file uses pixels with N possible _values,_ that
+is, pixels with `log2 N` bits.
+
+These files use the same 1bpp encoding as non-anti-aliased files, and achieve
+deeper pixels using a _planar_ representation: each layer is represented in the
+file more than once. However, each plane does _not_ add one bit, as we'll see in
+a moment.
+
+A file with `aa_levels=4` and `layer_table_count=400` will contain normal
+antialiased data in the first 400 table entries -- but the table will actually
+contain *1600* entries, and the entire set of layers will repeat 4 times. In
+each repetition, the bilevel layer image is computed with a different, lower
+threshold. Let's assume that the slicer computed the occupancy of each voxel as
+an 8-bit number from 0 to 255; in that case, for the parameters mentioned just
+above, we have the following sets of layer images:
+
+- Images 0-399 have pixels set where the value is `> 192`.
+- Images 400-799 have pixels set where the value is `> 128`.
+- Images 800-1199 have pixels set where the value is `> 64`.
+- Images 1200-1599 have pixels set where the value is `> 0`.
+
+NOTE: The precise thresholding values there represent one way of doing it, and
+may not be how the proprietary software computes this.
+
+Each of these groups of 400 images is a *level set*, describing a set of pixels
+at or above a threshold level.
+
+And so, for an antialiased `cbddlp` file, we have the following header contents:
+
+- `layer_table_count` gives the number of physical printed layers in the piece.
+- `level_set_count` gives the number of repetitions of the layer table.
+- `aa_levels` matches `level_set_count`.
+- The actual data for physically printed layer `n` is in layer table records
+  `n`, `n + layer_table_count`, and so on through `n + (level_set_count - 1) *
+  layer_table_count`.
+
+TIP: This encoding means that you can ignore `level_set_count` / `aa_levels` and
+read just the first `layer_table_count` entries to get a valid but non-AA
+result. I suspect that this scheme is a backwards compatibility move.
+
+=== `ctb` layer data encoding
+
+`ctb` files use a 7-bit-per-pixel representation, and so they have no need for
+complex antialiasing schemes. When antialiasing is enabled, they represent each
+voxel from 0 (empty) to 127 (full); when antialiasing is disabled, they use
+*only* the values 0 and 127. Easy.
+
+However, the RLE scheme is different from the other ones we've seen, and the
+data itself is encrypted. We'll consider the unencrypted case first. Files
+generated by Catibo are unencrypted by default; it turns out that the
+proprietary software disables encryption if you simply set the `encryption_key`
+to zero, so we do that.
+
+This scheme is referred to as `RLE7` in the Catibo sources if you want to read a
+formal description.
+
+The `ctb` layer data is encoded using a variable-length run-length encoding
+scheme. Each run is encoded as follows:
+
+- Bits 6:0 (LSBs) of the first byte give the pixel value, 0 to 127.
+- Bit 7 (MSB) of the first byte indicates whether this is a single, unique pixel
+  (0) or a run (1).
+- If a run is present, its length is encoded in the following 1-4 bytes.
+
+The run length's length is indicated by the MSBs of the next byte, and it may
+extend into additional bytes:
+
+- `0b0xxx_xxxx`: 7-bit run length in LSBs.
+- `0b10xx_xxxx`: 14-bit run length, in 6 LSBs and *next byte*.
+- `0b110x_xxxx`: 21-bit run length, in 5 LSBs and *next two bytes*.
+- `0b1110_xxxx`: 28-bit run length, in 4 LSBs and *next three bytes*.
+
+IMPORTANT: When a run length requires more than one byte, the bytes are in *big
+endian order.* This is the only case in this family of file formats where
+numbers are represented in big endian.
+
+NOTE: A 28-bit run length might seem excessive, but note that a 21-bit run
+length is not quite enough to encode an entirely empty or full 4k frame.
+
+Examples:
+
+- `0x7F` is a single pixel with value 127.
+- `0xFF 0x2a` is a run of 42 pixels with value 127.
+- `0xFF 0xEF 0xFF 0xFF 0xFF` is a run of 268,435,455 pixels with value 127.
+
+=== `ctb` layer data encryption
+
+`ctb` files produced by proprietary software encrypt the layer data. This causes
+me to write docs with a significantly elevated level of frustrated snark.
+
+IMPORTANT: Encryption like this only provides obfuscation, not any protection
+for either your designs or the file format. Basically, it just gets in the way
+when I want to work with _my designs_ for _my own printer,_ which is _not cool,_
+and means I have to start a whole reverse engineering effort to fix the problem.
+Vendors, please stop doing crap like this. It seriously doesn't work.
+
+==== The `86` cipher
+
+`ctb` files use a 32-bit XOR-based stream cipher (i.e. a stream cipher that
+processes 32 bits at a time) that takes as input a 32-bit key and a 32-bit
+initialization vector (IV). I've nicknamed this cipher the `86` cipher after the
+magic number byte in the file header that indicates its presence. Also, because
+I started this project to 86 it.
+
+The cipher uses the key and IV to set up a _keystream_ of pseudo-random 32-bit
+words. Each word from the keystream is XOR'd with the corresponding word in the
+input to get the output word. Because the keystream depends only on the key and
+IV, encryption and decryption are equivalent, i.e. encrypting something twice
+just returns the plaintext.
+
+While I've been talking about input and output as though they consist of whole
+32-bit words, the cipher can be easily adapted to arbitrary-length data by
+padding it, processing it, and truncating it to the original length. This is
+because the cipher has no _diffusion_ across bits in a 32-bit word, so any
+pad-and-truncate operation won't affect the preserved data.
+
+NOTE: The lack of diffusion is one of the weaknesses of XOR-based ciphers. There
+are several others; the main relevant one for our purposes is that they show
+certain statistical regularities that attract cryptanalysts like catnip.
+
+Concretely, the keystream `X[n]` is generated by:
+
+....
+c = key * 0x2D83_CDAC + 0xD8A8_3424
+X[0] = (iv * 0x1E15_30CD + 0xEC3D_47CD) * c
+X[n + 1] = X[n] + c
+....
+
+(Where both `*` and `+` are modulo 2^32^.)
+
+TIP: If that looks like an incorrectly implemented linear congruential random
+number generator, please award yourself a math point.
+
+Then, each block `C[n]` of the ciphertext is produced from block `P[n]` of the
+plaintext by:
+
+....
+C[n] = P[n] ^ X[n]
+....
+
+TIP: I'm omitting the cryptanalysis details because I don't want to help vendors
+get _better_ at this, I just want them to _stop doing it._ But let's all take a
+moment to recall the First Rule of Cryptography: _don't roll your own
+cryptography._
+
+==== Application of the `86` cipher to layer data
+
+In a `ctb` file, the layer data is generated as described in the previous
+section, and is then encrypted with a random key. The key is stored in the file
+header (in the `encryption_key` field).
+
+The index of the layer being encrypted in the layer table is used as the IV --
+so the bottom layer has IV=0, the next has IV=1, etc.
+
+Interestingly, encryption is disabled if `encryption_key` is 0.
