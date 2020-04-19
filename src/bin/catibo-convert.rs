@@ -65,21 +65,27 @@ struct Args {
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::from_args();
 
-    let input_format = args.input_format.or_else(|| {
-        format_from_ext(args.input.extension()?.to_str()?)
-    }).unwrap_or_else(|| {
-        eprintln!("input file must have a recognized extension, or \
-            format must be specified");
-        std::process::exit(1);
-    });
+    let input_format = args
+        .input_format
+        .or_else(|| format_from_ext(args.input.extension()?.to_str()?))
+        .unwrap_or_else(|| {
+            eprintln!(
+                "input file must have a recognized extension, or \
+            format must be specified"
+            );
+            std::process::exit(1);
+        });
 
-    let output_format = args.output_format.or_else(|| {
-        format_from_ext(args.output.extension()?.to_str()?)
-    }).unwrap_or_else(|| {
-        eprintln!("output file must have a recognized extension, or \
-            format must be specified");
-        std::process::exit(1);
-    });
+    let output_format = args
+        .output_format
+        .or_else(|| format_from_ext(args.output.extension()?.to_str()?))
+        .unwrap_or_else(|| {
+            eprintln!(
+                "output file must have a recognized extension, or \
+            format must be specified"
+            );
+            std::process::exit(1);
+        });
 
     let input_image = std::fs::read(args.input)?;
     let parsed = catibo::input::parse_file(&input_image)?;
