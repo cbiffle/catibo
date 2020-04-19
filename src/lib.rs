@@ -249,10 +249,12 @@ pub struct FileHeader {
     /// appears to be padded for expansion and the final bytes are unused.
     pub ext_config_size: U32LE,
 
-    /// Antialiasing level set count. For 1bpp representations, this gives the
-    /// number of level sets included. For 7bpp representations, this appears to
-    /// be ignored, and should be zeroed for consistency.
-    pub antialias_level: U32LE,
+    /// Level set count. This records the number of copies of each layer that
+    /// are present. For 1bpp representations, this is equivalent to the
+    /// antialiasing level (because those formats implement antialiasing by
+    /// repetition). For 7bpp representations, this appears to be ignored,
+    /// and should be set to `1` for consistency.
+    pub level_set_count: U32LE,
 
     /// UV LED PWM level for normal layers. While stored in a 16-bit field this
     /// appears to be an 8-bit value. Larger numbers mean higher duty cycle.
@@ -337,8 +339,12 @@ pub struct ExtConfig2 {
     /// slicing.
     pub mysterious_id: U32LE,
 
-    /// This appears to be a copy of the antialising level.
-    pub antialias_level_again: U32LE,
+    /// User antialiasing setting.
+    ///
+    /// For 1bpp formats, this will match the `level_set_count` from the file
+    /// header. For deeper formats (7bpp) this indicates whether thresholding
+    /// was performed on the image data.
+    pub antialias_level: U32LE,
 
     /// Software revision, stored as 0xmajor_minor_patch_00.
     pub software_version: U32LE,

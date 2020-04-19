@@ -116,7 +116,7 @@ pub fn parse_file(buf: &[u8]) -> Result<Layout<'_>, ParseError> {
     // Okay, we gots to employ some smarts here. The layer table length in the
     // header lies for antialiased images.
     let actual_layer_count =
-        header.layer_table_count.get() * header.antialias_level.get();
+        header.layer_table_count.get() * header.level_set_count.get();
     let layer_table = parse_slice::<LayerHeader>(
         buf,
         header.layer_table_offset.get(),

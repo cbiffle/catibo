@@ -136,13 +136,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     // Adjust settings based on target format.
-    let in_aa_levels = parsed.header.antialias_level.get();
-    let out_aa_levels = match (input_format, output_format) {
-        (Format::cbddlp, Format::cbddlp) => in_aa_levels,
+    let in_ls_count = parsed.header.level_set_count.get();
+    let out_ls_count = match (input_format, output_format) {
+        (Format::cbddlp, Format::cbddlp) => in_ls_count,
         (Format::ctb, Format::cbddlp) => 1,
         (_, Format::ctb) => 1,
     };
-    outb.aa_levels(out_aa_levels);
+    outb.level_set_count(out_ls_count);
 
     // Preview image format is consistent across all format variations currently
     // known, so we can copy it directly without decompressing.
@@ -161,7 +161,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let header = &parsed.layer_table[i];
 
         let per_level_layer_count =
-            parsed.layer_data.len() / in_aa_levels as usize;
+            parsed.layer_data.len() / in_ls_count as usize;
 
         let cvt_data = match (input_format, output_format) {
             (Format::cbddlp, Format::ctb) => {

@@ -99,6 +99,7 @@ pub struct Builder {
     encryption_mode: u32,
     encryption_key: U32LE,
 
+    level_set_count: u32,
     aa_levels: u32,
 
     layers: Vec<Layer>,
@@ -149,6 +150,7 @@ impl Builder {
             machine_type: vec![],
             encryption_mode,
             encryption_key: U32LE::default(),
+            level_set_count: 1,
             aa_levels: 1,
             layers: vec![],
         }
@@ -186,9 +188,22 @@ impl Builder {
         self
     }
 
-    /// Updates the antialiasing levels that will be recorded.
+    /// Updates the number of times each level set (layer data) is repeated.
     ///
-    /// This needs to match your encoded layers.
+    /// For 1bpp representations, this should match the `aa_levels`, which
+    /// should in turn match how often layers are repeated.
+    ///
+    /// For deeper representations this should not be changed from the default
+    /// of 1.
+    pub fn level_set_count(&mut self, x: u32) -> &mut Self {
+        self.level_set_count = x;
+        self
+    }
+    /// Updates the user antialiasing setting that will be recorded.
+    ///
+    /// Doing this properly requires some care -- for 1bpp representations, this
+    /// should match the `level_set_count`, which should in turn match how often
+    /// layers are repeated. For deeper representations, this doesn't mean much.
     pub fn aa_levels(&mut self, x: u32) -> &mut Self {
         self.aa_levels = x;
         self
@@ -401,6 +416,7 @@ impl Builder {
                 machine_type_offset: U32LE::new(machine_type_offset as u32),
                 machine_type_len: U32LE::new(self.machine_type.len() as u32),
                 encryption_mode: U32LE::new(self.encryption_mode),
+                antialias_level: U32LE::new(self.aa_levels),
                 ..ExtConfig2::default()
             },
             &mut out,
@@ -475,7 +491,7 @@ impl Builder {
             bot_pwm_level: self.bot_pwm_level,
             encryption_key: self.encryption_key,
 
-            antialias_level: U32LE::new(self.aa_levels),
+            level_set_count: U32LE::new(self.level_set_count),
 
             ..FileHeader::default()
         });
