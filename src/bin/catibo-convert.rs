@@ -89,54 +89,55 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let input_image = std::fs::read(args.input)?;
     let parsed = catibo::input::parse_file(&input_image)?;
+    let (hdr, ext_config) = match parsed.header {
+        catibo::input::Headers::Split {
+            header, ext_config, ..
+        } => (header, ext_config),
+        _ => unimplemented!(),
+    };
 
     // Preserve the input key, unless an output key has been explicitly
     // provided.
-    let out_key = args
-        .key
-        .unwrap_or_else(|| parsed.header.encryption_key.get());
+    let out_key = args.key.unwrap_or_else(|| hdr.encryption_key.get());
 
     let mut outb =
         catibo::output::Builder::for_revision(output_format.into(), 2);
 
     // Copy over unmodified print parameters.
-    let resolution = [
-        parsed.header.resolution[0].get(),
-        parsed.header.resolution[1].get(),
-    ];
+    let resolution = [hdr.resolution[0].get(), hdr.resolution[1].get()];
     outb.machine_type(parsed.machine_type.to_vec())
         .printer_out_mm([
-            parsed.header.printer_out_mm[0].get(),
-            parsed.header.printer_out_mm[1].get(),
-            parsed.header.printer_out_mm[2].get(),
+            hdr.printer_out_mm[0].get(),
+            hdr.printer_out_mm[1].get(),
+            hdr.printer_out_mm[2].get(),
         ])
         .resolution(resolution)
-        .mirror(parsed.header.mirror.get())
-        .layer_height_mm(parsed.header.layer_height_mm.get())
-        .overall_height_mm(parsed.header.overall_height_mm.get())
-        .bot_layer_count(parsed.header.bot_layer_count.get())
-        .exposure_s(parsed.header.exposure_s.get())
-        .bot_exposure_s(parsed.header.bot_exposure_s.get())
-        .light_off_time_s(parsed.header.light_off_time_s.get())
-        .bot_light_off_time_s(parsed.ext_config.bot_light_off_time_s.get())
-        .pwm_level(parsed.header.pwm_level.get())
-        .bot_pwm_level(parsed.header.bot_pwm_level.get())
-        .lift_dist_mm(parsed.ext_config.lift_dist_mm.get())
-        .bot_lift_dist_mm(parsed.ext_config.bot_lift_dist_mm.get())
-        .lift_speed_mmpm(parsed.ext_config.lift_speed_mmpm.get())
-        .bot_lift_speed_mmpm(parsed.ext_config.bot_lift_speed_mmpm.get())
-        .retract_speed_mmpm(parsed.ext_config.retract_speed_mmpm.get())
-        .print_time_s(parsed.header.print_time_s.get())
-        .print_volume_ml(parsed.ext_config.print_volume_ml.get())
-        .print_mass_g(parsed.ext_config.print_mass_g.get())
-        .print_price(parsed.ext_config.print_price.get());
+        .mirror(hdr.mirror.get())
+        .layer_height_mm(hdr.layer_height_mm.get())
+        .overall_height_mm(hdr.overall_height_mm.get())
+        .bot_layer_count(hdr.bot_layer_count.get())
+        .exposure_s(hdr.exposure_s.get())
+        .bot_exposure_s(hdr.bot_exposure_s.get())
+        .light_off_time_s(hdr.light_off_time_s.get())
+        .bot_light_off_time_s(ext_config.bot_light_off_time_s.get())
+        .pwm_level(hdr.pwm_level.get())
+        .bot_pwm_level(hdr.bot_pwm_level.get())
+        .lift_dist_mm(ext_config.lift_dist_mm.get())
+        .bot_lift_dist_mm(ext_config.bot_lift_dist_mm.get())
+        .lift_speed_mmpm(ext_config.lift_speed_mmpm.get())
+        .bot_lift_speed_mmpm(ext_config.bot_lift_speed_mmpm.get())
+        .retract_speed_mmpm(ext_config.retract_speed_mmpm.get())
+        .print_time_s(hdr.print_time_s.get())
+        .print_volume_ml(ext_config.print_volume_ml.get())
+        .print_mass_g(ext_config.print_mass_g.get())
+        .print_price(ext_config.print_price.get());
 
     if output_format.uses_encryption() {
         outb.encryption_key(out_key);
     }
 
     // Adjust settings based on target format.
-    let in_ls_count = parsed.header.level_set_count.get();
+    let in_ls_count = hdr.level_set_count.get();
     let out_ls_count = match (input_format, output_format) {
         (Format::cbddlp, Format::cbddlp) => in_ls_count,
         (Format::ctb, Format::cbddlp) => 1,
@@ -201,7 +202,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                     &parsed.layer_data[i],
                     resolution,
                     i as u32,
-                    parsed.header.encryption_key.get(),
+                    hdr.encryption_key.get(),
                     |_, _, x| uncompressed.push(x),
                 )?;
                 let mut compressed = Vec::with_capacity(uncompressed.len());
@@ -217,10 +218,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             // reencryption only, no recompression.
             (Format::ctb, Format::ctb) if args.key.is_some() => {
                 let mut buf = parsed.layer_data[i].to_vec();
-                let in_key = parsed.header.encryption_key.get();
+                let in_key = hdr.encryption_key.get();
                 if in_key != 0 {
                     catibo::crypto::crypt86(
-                        parsed.header.encryption_key.get(),
+                        hdr.encryption_key.get(),
                         i as u32,
                         &mut buf,
                     );

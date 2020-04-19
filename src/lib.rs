@@ -127,7 +127,7 @@ pub enum Magic {
     /// Indicates the multilevel format (CTB).
     Multilevel = 0x12fd_0086,
     // Observed in the wild but not yet fully implemented:
-    // SonicMini = 0x9fda83ae,
+    PlanarLevelSet2 = 0x9fda83ae, // TODO wrong name
 }
 
 impl Magic {
@@ -143,9 +143,23 @@ impl Magic {
     pub fn uses_aa_levels(self) -> bool {
         match self {
             Self::Multilevel => false,
-            Self::PlanarLevelSet => true,
+            Self::PlanarLevelSet | Self::PlanarLevelSet2 => true,
         }
     }
+
+    pub fn header_style(self) -> HeaderStyle {
+        match self {
+            Magic::PlanarLevelSet2 => HeaderStyle::Omni,
+            _ => HeaderStyle::Split,
+        }
+    }
+}
+
+/// Distinguishes styles of header when the magic is asked.
+#[derive(Copy, Clone, Debug)]
+pub enum HeaderStyle {
+    Split,
+    Omni,
 }
 
 /// Shorthand for little-endian `u32`s.
@@ -179,16 +193,26 @@ impl core::fmt::Debug for F32LE {
     }
 }
 
-/// Common file header layout.
+/// Common file header layout. This comes at the start of the file and tells us
+/// what to look for next.
 #[derive(Clone, Debug, Default, AsBytes, FromBytes, Unaligned)]
 #[repr(C)]
-pub struct FileHeader {
+pub struct MagicHeader {
     /// Magic number that determines the file encoding, etc. Values we currently
     /// understand are listed in the `Magic` enum.
     pub magic: U32LE,
     /// File format version number. In practice, always 2.
     pub version: U32LE,
+}
 
+/// Split file header layout.
+///
+/// This header record is split over three physical records: this one,
+/// `ExtConfig`, and `ExtConfig2`. It preferences the other two by offset and
+/// size. (This appears to be for historical reasons.)
+#[derive(Clone, Debug, Default, AsBytes, FromBytes, Unaligned)]
+#[repr(C)]
+pub struct SplitHeader {
     /// Printer output volume in millimeters along X, Y, Z.
     pub printer_out_mm: [F32LE; 3],
 
@@ -304,10 +328,10 @@ pub struct ExtConfig {
     pub bot_light_off_time_s: F32LE,
     /// Normal-layer light off-time, in seconds. This determines how long the
     /// light is off between non-bottom layers. Apparent duplicate of
-    /// `FileHeader::light_off_time_s`, always matches in the wild.
+    /// `SplitHeader::light_off_time_s`, always matches in the wild.
     pub light_off_time_s: F32LE,
     /// Number of layers considered to be "bottom." Apparent duplicate of
-    /// `FileHeader::bot_layer_count`, always matches in the wild.
+    /// `SplitHeader::bot_layer_count`, always matches in the wild.
     pub bot_layer_count: U32LE,
 
     /// 16 bytes apparently reserved for expansion
@@ -392,4 +416,68 @@ pub struct LayerHeader {
 
     /// Unknown run of 16 bytes, always zeroed in practice.
     pub _unknown_14: [u8; 16],
+}
+
+/// A unified file header that combines the role of `SplitHeader`, `ExtConfig`,
+/// and `ExtConfig2`, introduced circa 2020 in `phz` files.
+///
+/// This has field ordering and role that strongly suggests someone started with
+/// the header files for the old header and moved lines around. The field names
+/// match those in the other header records where their roles appear to be
+/// equivalent.
+///
+/// The format of all referenced records (`ImageHeader`, `LayerHeader`) does not
+/// appear to have changed.
+#[derive(Clone, Debug, Default, AsBytes, FromBytes, Unaligned)]
+#[repr(C)]
+pub struct OmniHeader {
+    pub layer_height_mm: F32LE,
+    pub exposure_s: F32LE,
+    pub bot_exposure_s: F32LE,
+    pub bot_layer_count: U32LE,
+    pub resolution: [U32LE; 2],
+    pub large_preview_offset: U32LE,
+    pub layer_table_offset: U32LE,
+    pub layer_table_count: U32LE,
+    pub small_preview_offset: U32LE,
+    pub print_time_s: U32LE,
+    pub mirror: U32LE,
+    pub level_set_count: U32LE,
+    pub pwm0: U16LE,
+    pub pwm1: U16LE,
+    pub zeroes_40: [u8; 8],
+    pub overall_height_mm: F32LE,
+    pub print_vol_mm: [F32LE; 3],
+    pub encryption_key: U32LE,
+    pub bot_light_off_time_s: F32LE,
+    pub light_off_time_s: F32LE, // or vice versa, check
+    pub bot_layer_count_again: U32LE,
+
+    pub _zero_68: [u8; 4],
+
+    // from top of ext_config
+    pub bot_lift_dist_mm: F32LE,
+    pub bot_lift_speed_mmpm: F32LE,
+    pub lift_dist_mm: F32LE,
+    pub lift_speed_mmpm: F32LE,
+    pub retract_speed_mmpm: F32LE,
+    pub vol_ml: F32LE,
+    pub mass_g: F32LE,
+    pub cost: F32LE,
+
+    pub _zero_8c: [u8; 4],
+
+    // from ext_config2
+    pub machine_type_offset: U32LE,
+    pub machine_type_len: U32LE,
+
+    // inserted
+    pub _zero_98: [u8; 6 * 4],
+
+    // more from ext_config2
+    pub encryption_mode: U32LE,
+    pub mysterious_id: U32LE,
+    pub antialias_level: U32LE,
+    pub software_version: U32LE,
+    pub _zero_c0: [u8; 4 * 6],
 }

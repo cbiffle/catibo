@@ -8,8 +8,8 @@ use zerocopy::AsBytes;
 use crate::crypto;
 use crate::rle;
 use crate::{
-    ExtConfig, ExtConfig2, FileHeader, ImageHeader, LayerHeader, Magic, F32LE,
-    U16LE, U32LE,
+    ExtConfig, ExtConfig2, ImageHeader, LayerHeader, Magic, MagicHeader,
+    SplitHeader, F32LE, U16LE, U32LE,
 };
 
 /// Quantizes and encodes 8bpp samples into an RLE7-encoded slice with optional
@@ -128,6 +128,7 @@ impl Builder {
         let encryption_mode = match magic {
             Magic::PlanarLevelSet => 0,
             Magic::Multilevel => 0xF,
+            Magic::PlanarLevelSet2 => unimplemented!(),
         };
         Self {
             magic,
@@ -391,7 +392,9 @@ impl Builder {
     /// file thru `out`.
     pub fn write(&self, mut out: impl io::Write + io::Seek) -> io::Result<()> {
         // Seek past file header.
-        out.seek(io::SeekFrom::Start(size_of::<FileHeader>() as u64))?;
+        out.seek(io::SeekFrom::Start(
+            (size_of::<MagicHeader>() + size_of::<SplitHeader>()) as u64,
+        ))?;
 
         // Write large preview.
         let large_preview_offset =
@@ -459,10 +462,11 @@ impl Builder {
         // Write file header.
         out.seek(io::SeekFrom::Start(0))?;
 
-        let file_header = Box::new(FileHeader {
+        let magic_header = MagicHeader {
             magic: U32LE::new(self.magic as u32),
             version: U32LE::new(self.version),
-
+        };
+        let split_header = Box::new(SplitHeader {
             large_preview_offset: U32LE::new(large_preview_offset as u32),
             small_preview_offset: U32LE::new(small_preview_offset as u32),
 
@@ -493,9 +497,10 @@ impl Builder {
 
             level_set_count: U32LE::new(self.level_set_count),
 
-            ..FileHeader::default()
+            ..SplitHeader::default()
         });
-        out.write_all(file_header.as_bytes())?;
+        out.write_all(magic_header.as_bytes())?;
+        out.write_all(split_header.as_bytes())?;
 
         Ok(())
     }

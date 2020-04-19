@@ -17,12 +17,31 @@ fn main() -> Result<(), Box<dyn Error>> {
     let input_image = std::fs::read(args.input)?;
     let parsed = catibo::input::parse_file(&input_image)?;
 
-    println!("--- file header ---");
-    println!("{:#x?}", parsed.header);
-    println!("--- ext_config ---");
-    println!("{:#x?}", parsed.ext_config);
-    println!("--- ext_config2 ---");
-    println!("{:#x?}", parsed.ext_config2);
+    match parsed.header {
+        catibo::input::Headers::Split {
+            header,
+            ext_config,
+            ext_config2,
+        } => {
+            println!("--- file header ---");
+            println!("{:#x?}", header);
+            println!("--- ext_config ---");
+            println!("{:#x?}", ext_config);
+            println!("--- ext_config2 ---");
+            println!("{:#x?}", ext_config2);
+        }
+        catibo::input::Headers::Omni(omni) => {
+            println!("--- unified file header ---");
+            println!("{:#x?}", omni);
+        }
+    }
+
+    println!("--- machine type ---");
+    if let Ok(s) = std::str::from_utf8(&parsed.machine_type) {
+        println!("{}", s);
+    } else {
+        println!("{:x?}", parsed.machine_type);
+    }
     println!("--- large preview image ---");
     println!("{:#x?}", parsed.large_preview_header);
     println!("--- small preview image ---");

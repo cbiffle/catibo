@@ -8,7 +8,8 @@ use zerocopy::{FromBytes, LayoutVerified, Unaligned};
 use crate::crypto;
 use crate::rle;
 use crate::{
-    ExtConfig, ExtConfig2, FileHeader, ImageHeader, LayerHeader, Magic,
+    ExtConfig, ExtConfig2, HeaderStyle, ImageHeader, LayerHeader, Magic,
+    MagicHeader, OmniHeader, SplitHeader,
 };
 
 /// Borrows from an in-memory file image to indicate all known records in the
@@ -17,12 +18,10 @@ use crate::{
 /// Each field in this struct references some part of an in-memory file image
 /// with lifetime `'a`.
 pub struct Layout<'a> {
-    /// File header.
-    pub header: &'a FileHeader,
-    /// First extended config record.
-    pub ext_config: &'a ExtConfig,
-    /// Second extended config record.
-    pub ext_config2: &'a ExtConfig2,
+    /// Magic header.
+    pub magic: &'a MagicHeader,
+    /// Variations on file header.
+    pub header: Headers<'a>,
     /// Machine type name.
     pub machine_type: &'a [u8],
     /// Image header for the larger preview image.
@@ -38,6 +37,56 @@ pub struct Layout<'a> {
     pub layer_table: &'a [LayerHeader],
     /// Encoded data corresponding to records in `layer_table`.
     pub layer_data: Vec<&'a [u8]>,
+}
+
+pub enum Headers<'a> {
+    Split {
+        /// Start of split header.
+        header: &'a SplitHeader,
+        /// First extended config record.
+        ext_config: &'a ExtConfig,
+        /// Second extended config record.
+        ext_config2: &'a ExtConfig2,
+    },
+    Omni(&'a OmniHeader),
+}
+
+/// Unified interface to data common to all header types.
+impl<'a> Headers<'a> {
+    pub fn large_preview_offset(&self) -> u32 {
+        match self {
+            Self::Split { header, .. } => header.large_preview_offset.get(),
+            Self::Omni(header) => header.large_preview_offset.get(),
+        }
+    }
+
+    pub fn small_preview_offset(&self) -> u32 {
+        match self {
+            Self::Split { header, .. } => header.small_preview_offset.get(),
+            Self::Omni(header) => header.small_preview_offset.get(),
+        }
+    }
+
+    pub fn layer_table_offset(&self) -> u32 {
+        match self {
+            Self::Split { header, .. } => header.layer_table_offset.get(),
+            Self::Omni(header) => header.layer_table_offset.get(),
+        }
+    }
+
+    pub fn layer_table_count(&self) -> u32 {
+        match self {
+            Self::Split { header, .. } => header.layer_table_count.get(),
+            Self::Omni(header) => header.layer_table_count.get(),
+        }
+    }
+
+    pub fn level_set_count(&self) -> u32 {
+        match self {
+            Self::Split { header, .. } => header.level_set_count.get(),
+            Self::Omni(header) => header.level_set_count.get(),
+        }
+    }
 }
 
 /// Errors produced by `parse_file`. These only reflect structural issues in the
@@ -74,33 +123,58 @@ impl std::error::Error for ParseError {}
 /// This function will decline to parse any file with unrecognized magic. (TODO:
 /// it would otherwise be useful for analyzing format variations.)
 pub fn parse_file(buf: &[u8]) -> Result<Layout<'_>, ParseError> {
-    let header = parse_type::<FileHeader>(buf, 0)?;
+    let magic_header = parse_type::<MagicHeader>(buf, 0)?;
 
     // Indicate magic errors *first*, before trying a bunch of silly parsing.
-    if Magic::from_u32(header.magic.get()).is_none() {
-        return Err(ParseError::BadMagic(header.magic.get()));
-    }
+    let magic = Magic::from_u32(magic_header.magic.get())
+        .ok_or(ParseError::BadMagic(magic_header.magic.get()))?;
 
-    let ext_config = parse_type_prefix::<ExtConfig>(
-        buf,
-        header.ext_config_offset.get(),
-        header.ext_config_size.get(),
-    )?;
-    let ext_config2 = parse_type_prefix::<ExtConfig2>(
-        buf,
-        header.ext_config2_offset.get(),
-        header.ext_config2_size.get(),
-    )?;
-    let machine_type = parse_bytes(
-        buf,
-        ext_config2.machine_type_offset.get(),
-        ext_config2.machine_type_len.get(),
-    )?;
+    let (headers, machine_type) = match magic.header_style() {
+        HeaderStyle::Split => {
+            let header = parse_type::<SplitHeader>(
+                buf,
+                size_of::<MagicHeader>() as u32,
+            )?;
+            let ext_config = parse_type_prefix::<ExtConfig>(
+                buf,
+                header.ext_config_offset.get(),
+                header.ext_config_size.get(),
+            )?;
+            let ext_config2 = parse_type_prefix::<ExtConfig2>(
+                buf,
+                header.ext_config2_offset.get(),
+                header.ext_config2_size.get(),
+            )?;
+            let machine_type = parse_bytes(
+                buf,
+                ext_config2.machine_type_offset.get(),
+                ext_config2.machine_type_len.get(),
+            )?;
+            (
+                Headers::Split {
+                    header,
+                    ext_config,
+                    ext_config2,
+                },
+                machine_type,
+            )
+        }
+        HeaderStyle::Omni => {
+            let header =
+                parse_type::<OmniHeader>(buf, size_of::<MagicHeader>() as u32)?;
+            let machine_type = parse_bytes(
+                buf,
+                header.machine_type_offset.get(),
+                header.machine_type_len.get(),
+            )?;
+            (Headers::Omni(header), machine_type)
+        }
+    };
 
     let large_preview_header =
-        parse_type::<ImageHeader>(buf, header.large_preview_offset.get())?;
+        parse_type::<ImageHeader>(buf, headers.large_preview_offset())?;
     let small_preview_header =
-        parse_type::<ImageHeader>(buf, header.small_preview_offset.get())?;
+        parse_type::<ImageHeader>(buf, headers.small_preview_offset())?;
 
     let large_preview_data = parse_bytes(
         buf,
@@ -116,10 +190,10 @@ pub fn parse_file(buf: &[u8]) -> Result<Layout<'_>, ParseError> {
     // Okay, we gots to employ some smarts here. The layer table length in the
     // header lies for antialiased images.
     let actual_layer_count =
-        header.layer_table_count.get() * header.level_set_count.get();
+        headers.layer_table_count() * headers.level_set_count();
     let layer_table = parse_slice::<LayerHeader>(
         buf,
-        header.layer_table_offset.get(),
+        headers.layer_table_offset(),
         actual_layer_count,
     )?;
 
@@ -130,9 +204,8 @@ pub fn parse_file(buf: &[u8]) -> Result<Layout<'_>, ParseError> {
     let layer_data = layer_data?;
 
     Ok(Layout {
-        header,
-        ext_config,
-        ext_config2,
+        magic: magic_header,
+        header: headers,
         machine_type,
         large_preview_header,
         large_preview_data,
