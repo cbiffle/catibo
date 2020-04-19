@@ -25,7 +25,14 @@ Example:
 
 ```shell
 # Strip encryption
-$ cargo run -- --key=0 input.ctb input-decrypted.ctb
+$ cargo run --bin catibo-convert -- --key=0 input.ctb input-decrypted.ctb
 # Converting between formats
-$ cargo run -- input.ctb output.cbddlp
+$ cargo run --bin catibo-convert input.ctb output.cbddlp
 ```
+
+## `catibo-inspect`
+
+The `catibo-inspect` tool helps reverse engineering by printing parsed headers
+from supported file types. If you'd like far too much information about the
+contents of a file, but don't want to spend hours squinting at a hexdump, this
+tool may be of interest.
