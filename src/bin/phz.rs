@@ -55,7 +55,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         let data_slice = &input_image[lhd.data_offset.get() as usize
             ..lhd.data_offset.get() as usize + lhd.data_len.get() as usize];
         let mut copy = data_slice.to_vec();
-        crypt9f(header.encryption_key.get(), i as u32, &mut copy);
+        catibo::crypto::crypt9f(
+            header.encryption_key.get(),
+            i as u32,
+            &mut copy,
+        );
 
         // Check statistical assumptions about RLE scheme
         //println!("contains 0x00: {:?}", copy.contains(&0));
@@ -177,26 +181,4 @@ struct PhzHeader {
     antialias_level: U32LE,
     software_version: U32LE,
     _zero_c0: [u8; 4 * 6],
-}
-
-/// Implementation of the new inferred variation on the XOR cipher from 86.
-pub fn crypt9f(key: u32, iv: u32, mut data: &mut [u8]) {
-    let mut state = (iv ^ 0x3fad2212)
-        .wrapping_mul(key % 0x4324)
-        .wrapping_mul(0x4910913d);
-    let inc = (key % 0x4324).wrapping_mul(0x34a32231);
-
-    while data.len() >= 4 {
-        let (four, rest) = data.split_at_mut(4);
-        let word = LittleEndian::read_u32(four);
-        LittleEndian::write_u32(four, word ^ state);
-        data = rest;
-        state = state.wrapping_add(inc);
-    }
-
-    // Handle up to 3 trailing bytes as though they are the prefix of a
-    // little-endian u32.
-    for (i, byte) in data.iter_mut().enumerate() {
-        *byte ^= (state >> (i * 8)) as u8;
-    }
 }
