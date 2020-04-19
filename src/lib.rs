@@ -308,8 +308,7 @@ pub struct ExtConfig {
     /// `FileHeader::bot_layer_count`, always matches in the wild.
     pub bot_layer_count: U32LE,
 
-    /// 16 bytes reserved for expansion -- contains snapshots of uninitialized
-    /// memory in files produced by proprietary software.
+    /// 16 bytes apparently reserved for expansion
     pub _unknown_2c: [u8; 16],
 }
 
@@ -334,13 +333,21 @@ pub struct ExtConfig2 {
     /// The best understood encrypted files use `0xF` here.
     pub encryption_mode: U32LE,
 
-    /// 36 bytes reserved for future expansion -- contains snapshots of
-    /// uninitialized memory in files produced by proprietary software.
-    ///
-    /// Expressed as two arrays here to get around Rust limitation in trait
-    /// impls for arrays. Ought to be fixable sometime after const generics
-    /// stabilizes.
-    pub _unknown_28: [[u8; 18]; 2],
+    /// This mysterious number increments with some combination of time and
+    /// slicing.
+    pub mysterious_id: U32LE,
+
+    /// This appears to be a copy of the antialising level.
+    pub antialias_level_again: U32LE,
+
+    /// Software revision, stored as 0xmajor_minor_patch_00.
+    pub software_version: U32LE,
+
+    /// Observed as 0x200
+    pub _unknown_34: U32LE,
+
+    /// 20 bytes apparently reserved for future expansion.
+    pub _unknown_38: [u8; 20],
 }
 
 /// Record used to describe the preview images.
