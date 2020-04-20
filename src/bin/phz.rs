@@ -81,20 +81,16 @@ fn decode(data: &[u8]) -> Vec<u8> {
     // Decoder for inferred RLE scheme.
     let mut out = vec![];
     let mut color = None;
-    let mut last_color = false;
     for &byte in data {
         if byte & 0x80 == 0 {
             let run_length = usize::from(byte & 0x7F);
             let color = color.expect("run without color?");
             out.resize(out.len() + run_length, color);
-            last_color = false;
         } else {
             out.push(byte << 1);
             color = Some(byte << 1);
-            last_color = true;
         }
     }
-    assert!(!last_color, "color at end, interpretation likely wrong");
     out
 }
 

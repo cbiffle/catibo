@@ -1,10 +1,9 @@
 use std::error::Error;
-use std::io;
 
 use clap::arg_enum;
+use num_traits::FromPrimitive;
 use rayon::prelude::*;
 use structopt::StructOpt;
-use num_traits::FromPrimitive;
 
 arg_enum! {
     #[allow(non_camel_case_types)]
@@ -87,27 +86,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let parsed = catibo::input::parse_file(&input_image)?;
 
     let output_magic = catibo::Magic::from(output_format);
-    let input_magic = if let Some(m) = catibo::Magic::from_u32(parsed.magic.magic.get()) {
-        m
-    } else {
-        eprintln!("unrecognized input magic");
-        std::process::exit(1);
-    };
 
-    if output_magic == input_magic {
-        // We may be able to just blit the data out. Unless...
-        if output_format.encryption().is_some()
-            && args.key != Some(parsed.header.encryption_key()) {
-            // We are being asked to reencrypt.
-        } else {
-            // Encryption is not being used!
-            just_write_copy(parsed, args)?;
-            return Ok(())
-        }
-    }
-
-    // We are doing an actual conversion.
-    //
     // If we're going CBDDLP <-> CTB, we need to recompress the layers and
     // potentially introduce or eliminate the bonkers antialiasing scheme.
     //
@@ -130,13 +109,16 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // provided.
     let out_key = args.key.unwrap_or_else(|| hdr.encryption_key());
 
-    let mut outb =
-        catibo::output::Builder::for_revision(output_magic, 2);
+    let mut outb = catibo::output::Builder::for_revision(output_magic, 2);
 
     let resolution = hdr.resolution();
     // Copy over unmodified print parameters.
     match hdr {
-        catibo::input::Headers::Split { header, ext_config, ..} => {
+        catibo::input::Headers::Split {
+            header,
+            ext_config,
+            ext_config2,
+        } => {
             outb.machine_type(parsed.machine_type.to_vec())
                 .printer_out_mm([
                     header.printer_out_mm[0].get(),
@@ -152,6 +134,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 .bot_exposure_s(header.bot_exposure_s.get())
                 .light_off_time_s(header.light_off_time_s.get())
                 .bot_light_off_time_s(ext_config.bot_light_off_time_s.get())
+                .aa_levels(ext_config2.antialias_level.get())
                 .pwm_level(header.pwm_level.get())
                 .bot_pwm_level(header.bot_pwm_level.get())
                 .lift_dist_mm(ext_config.lift_dist_mm.get())
@@ -180,6 +163,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 .bot_exposure_s(header.bot_exposure_s.get())
                 .light_off_time_s(header.light_off_time_s.get())
                 .bot_light_off_time_s(header.bot_light_off_time_s.get())
+                .aa_levels(header.antialias_level.get())
                 .pwm_level(header.pwm_level.get())
                 .bot_pwm_level(header.bot_pwm_level.get())
                 .lift_dist_mm(header.lift_dist_mm.get())
@@ -201,6 +185,9 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // We'll just force the level set count to 1, because we currently don't
     // support antialiased cbddlp output.
     outb.level_set_count(1);
+    if output_format == Format::cbddlp {
+        outb.aa_levels(1);
+    }
 
     // Preview image format is consistent across all format variations currently
     // known, so we can copy it directly without decompressing.
@@ -215,46 +202,63 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         parsed.small_preview_data.to_vec(),
     );
 
-    for i in 0..parsed.layer_table.len() {
-        let header = &parsed.layer_table[i];
+    let layers_to_add = (0..parsed.layer_table.len())
+        .into_par_iter()
+        .map(|i| {
+            let header = &parsed.layer_table[i];
 
-        let uncompressed = &chunky_layer_data[i];
-        let cvt_data = match output_format {
-            Format::ctb => {
-                let mut compressed =
-                    Vec::with_capacity(parsed.layer_data[i].len());
-                catibo::output::encode_rle7_slice(
-                    uncompressed.iter().cloned().peekable(),
-                    out_key,
-                    i as u32,
-                    &mut compressed,
-                );
+            let uncompressed = &chunky_layer_data[i];
+            let cvt_data = match output_format {
+                Format::ctb => {
+                    let mut compressed =
+                        Vec::with_capacity(parsed.layer_data[i].len());
+                    catibo::output::encode_rle7_slice(
+                        uncompressed.iter().cloned().peekable(),
+                        out_key,
+                        i as u32,
+                        &mut compressed,
+                    );
 
-                compressed
-            }
-            Format::cbddlp => {
-                let mut compressed = Vec::with_capacity(uncompressed.len());
-                let mut iter = uncompressed.iter().cloned().peekable();
-                while let Some(rle) = catibo::rle::encode_rle1(0x80, &mut iter)
-                {
-                    compressed.push(rle);
+                    compressed
                 }
+                Format::cbddlp => {
+                    let mut compressed = Vec::with_capacity(uncompressed.len());
+                    let mut iter = uncompressed.iter().cloned().peekable();
+                    while let Some(rle) =
+                        catibo::rle::encode_rle1(0x80, &mut iter)
+                    {
+                        compressed.push(rle);
+                    }
 
-                compressed
-            }
-            Format::phz => {
-                unimplemented!("phz output");
-            }
-        };
+                    compressed
+                }
+                Format::phz => {
+                    let mut compressed =
+                        Vec::with_capacity(parsed.layer_data[i].len());
+                    catibo::output::encode_rle7a_slice(
+                        &uncompressed,
+                        resolution[0],
+                        out_key,
+                        i as u32,
+                        &mut compressed,
+                    );
 
-        outb.layer(
-            header.z.get(),
-            header.exposure_s.get(),
-            header.light_off_time_s.get(),
-            cvt_data,
-        );
+                    compressed
+                }
+            };
+
+            (
+                header.z.get(),
+                header.exposure_s.get(),
+                header.light_off_time_s.get(),
+                cvt_data,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    for (z, exp, lof, data) in layers_to_add {
+        outb.layer(z, exp, lof, data);
     }
-
     outb.write(std::fs::File::create(args.output)?)?;
 
     Ok(())
@@ -266,76 +270,64 @@ fn format_from_ext(ext: &str) -> Option<Format> {
     Format::from_str(ext).ok()
 }
 
-fn just_write_copy(parsed: catibo::input::Layout<'_>, args: Args) -> io::Result<()> {
-    unimplemented!()
-}
-
-fn decompress_all_layers(parsed: &catibo::input::Layout<'_>) -> Result<Vec<Vec<u8>>, Box<dyn Error + Sync + Send>> {
+fn decompress_all_layers(
+    parsed: &catibo::input::Layout<'_>,
+) -> Result<Vec<Vec<u8>>, Box<dyn Error + Sync + Send>> {
     let magic = catibo::Magic::from_u32(parsed.magic.magic.get()).unwrap();
     let [width, height] = parsed.header.resolution();
     let per_level_layer_count = parsed.header.layer_table_count() as usize;
 
     match magic {
-        catibo::Magic::PlanarLevelSet => {
-            (0..per_level_layer_count)
-                .into_par_iter()
-                .map(|i| {
-                    let stack = parsed.layer_data[i..]
-                        .iter()
-                        .step_by(per_level_layer_count)
-                        .map(|data| {
-                            catibo::rle::RunIter::from(catibo::rle::Rle1Iter::from(
-                                    data.iter().cloned(),
-                            ))
-                        })
-                        .collect::<Vec<_>>();
-                    let mut data = Vec::with_capacity(
-                        (width * height) as usize,
-                    );
-                    catibo::input::decode_bilevel_slice(
-                        stack,
-                        [width, height],
-                        |_, _, v| data.push(v),
-                    )?;
-                    Ok(data)
-                })
-                .collect::<Result<Vec<_>, _>>()
-        }
-        catibo::Magic::Multilevel => {
-            (0..per_level_layer_count)
-                .into_par_iter()
-                .map(|i| {
-                    let mut uncompressed = Vec::with_capacity(
-                        (width * height) as usize,
-                    );
-                    catibo::input::decode_multilevel_slice(
-                        &parsed.layer_data[i],
-                        [width, height],
-                        i as u32,
-                        parsed.header.encryption_key(),
-                        |_, _, x| uncompressed.push(x),
-                    )?;
-                    Ok(uncompressed)
-                })
-                .collect::<Result<Vec<_>, _>>()
-        }
-        catibo::Magic::PlanarLevelSet2 => {
-            (0..per_level_layer_count)
-                .into_par_iter()
-                .map(|i| {
-                    let mut uncompressed = Vec::with_capacity(
-                        (width * height) as usize,
-                    );
-                    catibo::input::decode_phz_slice(
-                        &parsed.layer_data[i],
-                        [width, height],
-                        i as u32,
-                        parsed.header.encryption_key(),
-                        |_, _, x| uncompressed.push(x),
-                    )?;
-                    Ok(uncompressed)
-                })
-                .collect::<Result<Vec<_>, _>>()
-        }
+        catibo::Magic::PlanarLevelSet => (0..per_level_layer_count)
+            .into_par_iter()
+            .map(|i| {
+                let stack = parsed.layer_data[i..]
+                    .iter()
+                    .step_by(per_level_layer_count)
+                    .map(|data| {
+                        catibo::rle::RunIter::from(catibo::rle::Rle1Iter::from(
+                            data.iter().cloned(),
+                        ))
+                    })
+                    .collect::<Vec<_>>();
+                let mut data = Vec::with_capacity((width * height) as usize);
+                catibo::input::decode_bilevel_slice(
+                    stack,
+                    [width, height],
+                    |_, _, v| data.push(v),
+                )?;
+                Ok(data)
+            })
+            .collect::<Result<Vec<_>, _>>(),
+        catibo::Magic::Multilevel => (0..per_level_layer_count)
+            .into_par_iter()
+            .map(|i| {
+                let mut uncompressed =
+                    Vec::with_capacity((width * height) as usize);
+                catibo::input::decode_multilevel_slice(
+                    &parsed.layer_data[i],
+                    [width, height],
+                    i as u32,
+                    parsed.header.encryption_key(),
+                    |_, _, x| uncompressed.push(x),
+                )?;
+                Ok(uncompressed)
+            })
+            .collect::<Result<Vec<_>, _>>(),
+        catibo::Magic::PlanarLevelSet2 => (0..per_level_layer_count)
+            .into_par_iter()
+            .map(|i| {
+                let mut uncompressed =
+                    Vec::with_capacity((width * height) as usize);
+                catibo::input::decode_phz_slice(
+                    &parsed.layer_data[i],
+                    [width, height],
+                    i as u32,
+                    parsed.header.encryption_key(),
+                    |_, _, x| uncompressed.push(x),
+                )?;
+                Ok(uncompressed)
+            })
+            .collect::<Result<Vec<_>, _>>(),
     }
 }

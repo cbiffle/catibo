@@ -97,12 +97,13 @@ impl<'a> Headers<'a> {
 
     pub fn resolution(&self) -> [u32; 2] {
         match self {
-            Self::Split { header, .. } =>
-                [header.resolution[0].get(), header.resolution[1].get()],
-            Self::Omni(header) =>
-                [header.resolution[0].get(), header.resolution[1].get()],
+            Self::Split { header, .. } => {
+                [header.resolution[0].get(), header.resolution[1].get()]
+            }
+            Self::Omni(header) => {
+                [header.resolution[0].get(), header.resolution[1].get()]
+            }
         }
-
     }
 }
 

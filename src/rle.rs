@@ -432,7 +432,7 @@ pub fn encode_rle7a(
         // Collect pixels matching `current` until we exhaust our maximum run
         // length, or the pixels change, whichever comes first.
         let mut run_length = 0;
-        while run_length < 0x7f {
+        while run_length < 0x7d {
             // Merely peek at the next pixel, because if it's different, we'll
             // have to put it back.
             if let Some(val) = pixels.peek() {

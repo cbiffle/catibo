@@ -1,8 +1,9 @@
-# Catibo: read/write/analyze CTB and CBDDLP files
+# Catibo: read/write/analyze CTB, CBDDLP, and PHZ files
 
 Catibo is a Rust crate for working with the file formats used by low-end resin
-3D printers like the Elegoo Mars and CREALITY LD-002R. It provides a low-level
-API for manipulating these files and a set of command line tools.
+3D printers like the Elegoo Mars, CREALITY LD-002R, and Phrozen Sonic Mini. It
+provides a low-level API for manipulating these files and a set of command line
+tools.
 
 Catibo is the result of reverse engineering of files produced for those
 printers, and is not sanctioned or supported by printer manufacturers or the
@@ -11,15 +12,19 @@ contains the first known decoding and implementation of:
 
 - Several newly decoded fields in the files,
 - The format of the preview images stored in the files,
-- The encryption algorithm used in CTB files.
+- The PHZ headers.
+- The encryption algorithm used in CTB and PHZ files.
 
 ## `catibo-convert`
 
 The `catibo-convert` tool is included as an example. It can convert between the
-`CTB` and `CBDDLP` formats, clear data from reserved areas of files, and add or
-remove encryption. It can't currently produce antialiased CBDDLP files from CTB
-files, because antialiased CBDDLP is really unnecessarily complex and I ran out
-of steam.
+`ctb`, `cbddlp`, and `phz` formats, clear data from reserved areas of files, and
+add or remove encryption. It can't currently produce antialiased CBDDLP files
+from CTB files, because antialiased CBDDLP is really unnecessarily complex and I
+ran out of steam.
+
+Converting files between printer formats is merely a demonstration that the
+decodings work, and isn't very useful in day to day life.
 
 Example:
 

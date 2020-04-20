@@ -9,7 +9,7 @@ use crate::crypto;
 use crate::rle;
 use crate::{
     ExtConfig, ExtConfig2, ImageHeader, LayerHeader, Magic, MagicHeader,
-    SplitHeader, F32LE, U16LE, U32LE,
+    OmniHeader, SplitHeader, F32LE, U16LE, U32LE,
 };
 
 /// Quantizes and encodes 8bpp samples into an RLE7-encoded slice with optional
@@ -43,6 +43,24 @@ pub fn encode_rle7_slice<I>(
     }
     if key != 0 {
         crypto::crypt86(key, z, out);
+    }
+}
+
+pub fn encode_rle7a_slice(
+    data: &[u8],
+    width: u32,
+    key: u32,
+    z: u32,
+    out: &mut Vec<u8>,
+) {
+    // NOTE: in the wild, software using RLE7a has been observed emitting a
+    // maximum run of 1/2 the scanline width. I've reproduced this behaivor
+    // here, as I don't have hardware to test on right now.
+    for scanline in data.chunks(width as usize / 2) {
+        out.extend(rle::encode_rle7a(scanline.iter().cloned()));
+    }
+    if key != 0 {
+        crypto::crypt9f(key, z, out);
     }
 }
 
@@ -391,10 +409,26 @@ impl Builder {
     /// Gathers up all the information provided to the builder and generates a
     /// file thru `out`.
     pub fn write(&self, mut out: impl io::Write + io::Seek) -> io::Result<()> {
+        out.seek(io::SeekFrom::Start(0))?;
+        let magic_header = MagicHeader {
+            magic: U32LE::new(self.magic as u32),
+            version: U32LE::new(self.version),
+        };
+        out.write_all(magic_header.as_bytes())?;
+
         // Seek past file header.
-        out.seek(io::SeekFrom::Start(
-            (size_of::<MagicHeader>() + size_of::<SplitHeader>()) as u64,
-        ))?;
+        match self.magic {
+            Magic::Multilevel | Magic::PlanarLevelSet => {
+                out.seek(io::SeekFrom::Current(
+                    size_of::<SplitHeader>() as i64
+                ))?;
+            }
+            Magic::PlanarLevelSet2 => {
+                out.seek(
+                    io::SeekFrom::Current(size_of::<OmniHeader>() as i64),
+                )?;
+            }
+        }
 
         // Write large preview.
         let large_preview_offset =
@@ -404,31 +438,25 @@ impl Builder {
         let small_preview_offset =
             Self::write_encoded_image(&self.small_preview, &mut out)?;
 
-        // Write ext_config record
-        let ext_config_offset = Self::write_record(&self.ext_config, &mut out)?;
+        // Record our position and leave a hole for split header to insert the
+        // extconfigs.
+        let after_previews_offset = out.seek(io::SeekFrom::Current(0))?;
 
-        // Write ext_config2, which contains subordinate fields referenced by
-        // offset.
-        let ext_config2_offset = out.seek(io::SeekFrom::Current(0))?;
-        let machine_type_offset =
-            out.seek(io::SeekFrom::Current(size_of::<ExtConfig2>() as i64))?;
+        if self.magic == Magic::Multilevel
+            || self.magic == Magic::PlanarLevelSet
+        {
+            // Leave a hole.
+            let hole = size_of::<ExtConfig>() + size_of::<ExtConfig2>();
+            out.seek(io::SeekFrom::Current(hole as i64))?;
+        }
+
+        // Write machine type.
+        let machine_type_offset = out.seek(io::SeekFrom::Current(0))? as u32;
         out.write_all(&self.machine_type)?;
-        out.seek(io::SeekFrom::Start(ext_config2_offset))?;
-        Self::write_record(
-            &ExtConfig2 {
-                machine_type_offset: U32LE::new(machine_type_offset as u32),
-                machine_type_len: U32LE::new(self.machine_type.len() as u32),
-                encryption_mode: U32LE::new(self.encryption_mode),
-                antialias_level: U32LE::new(self.aa_levels),
-                ..ExtConfig2::default()
-            },
-            &mut out,
-        )?;
-        let layer_table_offset = out.seek(io::SeekFrom::Start(
-            machine_type_offset + self.machine_type.len() as u64,
-        ))?;
 
         // Leave a hole for the layer table.
+        let layer_table_offset =
+            machine_type_offset + self.machine_type.len() as u32;
         out.seek(io::SeekFrom::Current(
             (size_of::<LayerHeader>() * self.layers.len()) as i64,
         ))?;
@@ -446,7 +474,7 @@ impl Builder {
         };
 
         // Seek back and emit table.
-        out.seek(io::SeekFrom::Start(layer_table_offset))?;
+        out.seek(io::SeekFrom::Start(layer_table_offset as u64))?;
         for (layer, (offset, size)) in self.layers.iter().zip(&data_locations) {
             let header = LayerHeader {
                 z: F32LE::new(layer.z),
@@ -460,47 +488,114 @@ impl Builder {
         }
 
         // Write file header.
-        out.seek(io::SeekFrom::Start(0))?;
+        if self.magic == Magic::Multilevel
+            || self.magic == Magic::PlanarLevelSet
+        {
+            // Go back and write extension records.
+            out.seek(io::SeekFrom::Start(after_previews_offset))?;
 
-        let magic_header = MagicHeader {
-            magic: U32LE::new(self.magic as u32),
-            version: U32LE::new(self.version),
-        };
-        let split_header = Box::new(SplitHeader {
-            large_preview_offset: U32LE::new(large_preview_offset as u32),
-            small_preview_offset: U32LE::new(small_preview_offset as u32),
+            // Write ext_config record
+            let ext_config_offset =
+                Self::write_record(&self.ext_config, &mut out)?;
 
-            ext_config_offset: U32LE::new(ext_config_offset as u32),
-            ext_config_size: U32LE::new(size_of::<ExtConfig>() as u32),
+            // Write ext_config2.
+            let ext_config2_offset = Self::write_record(
+                &ExtConfig2 {
+                    machine_type_offset: U32LE::new(machine_type_offset),
+                    machine_type_len: U32LE::new(self.machine_type.len() as u32),
+                    encryption_mode: U32LE::new(self.encryption_mode),
+                    antialias_level: U32LE::new(self.aa_levels),
+                    ..ExtConfig2::default()
+                },
+                &mut out,
+            )?;
 
-            ext_config2_offset: U32LE::new(ext_config2_offset as u32),
-            ext_config2_size: U32LE::new(size_of::<ExtConfig2>() as u32),
+            // Write initial header.
+            out.seek(io::SeekFrom::Start(size_of::<MagicHeader>() as u64))?;
+            let split_header = Box::new(SplitHeader {
+                large_preview_offset: U32LE::new(large_preview_offset as u32),
+                small_preview_offset: U32LE::new(small_preview_offset as u32),
 
-            layer_table_offset: U32LE::new(layer_table_offset as u32),
-            layer_table_count: U32LE::new(
-                self.layers.len() as u32 / self.aa_levels,
-            ),
+                ext_config_offset: U32LE::new(ext_config_offset as u32),
+                ext_config_size: U32LE::new(size_of::<ExtConfig>() as u32),
 
-            printer_out_mm: self.printer_out_mm,
-            mirror: self.mirror,
-            layer_height_mm: self.layer_height_mm,
-            overall_height_mm: self.overall_height_mm,
-            exposure_s: self.exposure_s,
-            bot_exposure_s: self.bot_exposure_s,
-            light_off_time_s: self.light_off_time_s,
-            bot_layer_count: self.bot_layer_count,
-            resolution: self.resolution,
-            print_time_s: self.print_time_s,
-            pwm_level: self.pwm_level,
-            bot_pwm_level: self.bot_pwm_level,
-            encryption_key: self.encryption_key,
+                ext_config2_offset: U32LE::new(ext_config2_offset as u32),
+                ext_config2_size: U32LE::new(size_of::<ExtConfig2>() as u32),
 
-            level_set_count: U32LE::new(self.level_set_count),
+                layer_table_offset: U32LE::new(layer_table_offset),
+                layer_table_count: U32LE::new(
+                    self.layers.len() as u32 / self.aa_levels,
+                ),
 
-            ..SplitHeader::default()
-        });
-        out.write_all(magic_header.as_bytes())?;
-        out.write_all(split_header.as_bytes())?;
+                printer_out_mm: self.printer_out_mm,
+                mirror: self.mirror,
+                layer_height_mm: self.layer_height_mm,
+                overall_height_mm: self.overall_height_mm,
+                exposure_s: self.exposure_s,
+                bot_exposure_s: self.bot_exposure_s,
+                light_off_time_s: self.light_off_time_s,
+                bot_layer_count: self.bot_layer_count,
+                resolution: self.resolution,
+                print_time_s: self.print_time_s,
+                pwm_level: self.pwm_level,
+                bot_pwm_level: self.bot_pwm_level,
+                encryption_key: self.encryption_key,
+
+                level_set_count: U32LE::new(self.level_set_count),
+
+                ..SplitHeader::default()
+            });
+            out.write_all(split_header.as_bytes())?;
+        } else {
+            // Write unified header.
+            out.seek(io::SeekFrom::Start(size_of::<MagicHeader>() as u64))?;
+            let header = Box::new(OmniHeader {
+                large_preview_offset: U32LE::new(large_preview_offset as u32),
+                small_preview_offset: U32LE::new(small_preview_offset as u32),
+
+                layer_table_offset: U32LE::new(layer_table_offset),
+                layer_table_count: U32LE::new(
+                    self.layers.len() as u32 / self.aa_levels,
+                ),
+
+                printer_out_mm: self.printer_out_mm,
+                mirror: self.mirror,
+                layer_height_mm: self.layer_height_mm,
+                overall_height_mm: self.overall_height_mm,
+                exposure_s: self.exposure_s,
+                bot_exposure_s: self.bot_exposure_s,
+                light_off_time_s: self.light_off_time_s,
+                bot_layer_count: self.bot_layer_count,
+                resolution: self.resolution,
+                print_time_s: self.print_time_s,
+                pwm_level: self.pwm_level,
+                bot_pwm_level: self.bot_pwm_level,
+                encryption_key: self.encryption_key,
+
+                level_set_count: U32LE::new(self.level_set_count),
+
+                machine_type_offset: U32LE::new(machine_type_offset),
+                machine_type_len: U32LE::new(self.machine_type.len() as u32),
+                encryption_mode: U32LE::new(self.encryption_mode),
+                antialias_level: U32LE::new(self.aa_levels),
+
+                // Copy over fields from ExtConfig.
+                // TODO: shouldn't store these in the builder in ExtConfig
+                bot_lift_dist_mm: self.ext_config.bot_lift_dist_mm,
+                bot_lift_speed_mmpm: self.ext_config.bot_lift_speed_mmpm,
+                lift_dist_mm: self.ext_config.lift_dist_mm,
+                lift_speed_mmpm: self.ext_config.lift_speed_mmpm,
+                retract_speed_mmpm: self.ext_config.retract_speed_mmpm,
+                print_volume_ml: self.ext_config.print_volume_ml,
+                print_mass_g: self.ext_config.print_mass_g,
+                print_price: self.ext_config.print_price,
+                bot_light_off_time_s: self.ext_config.bot_light_off_time_s,
+                bot_layer_count_again: self.bot_layer_count,
+
+                ..OmniHeader::default()
+            });
+            out.write_all(header.as_bytes())?;
+        }
 
         Ok(())
     }
