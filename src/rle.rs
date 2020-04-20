@@ -402,8 +402,7 @@ impl Run7 {
 /// `bytes` is exhausted.
 pub fn decode_rle7a(
     mut bytes: impl Iterator<Item = u8>,
-) -> impl Iterator<Item = Result<Run, RleError>>
-{
+) -> impl Iterator<Item = Result<Run, RleError>> {
     let mut last = None;
     std::iter::from_fn(move || {
         let b = bytes.next()?;
@@ -418,6 +417,57 @@ pub fn decode_rle7a(
                 Some(v) => Some(Ok((v, usize::from(b)))),
             }
         }
+    })
+}
+
+/// Returns an iterator that yields the RLE7a encoded version of `pixels` until
+/// `pixels` is exhausted.
+pub fn encode_rle7a(
+    pixels: impl Iterator<Item = u8>,
+) -> impl Iterator<Item = u8> {
+    let mut pixels = pixels.peekable();
+
+    let mut current = None;
+    std::iter::from_fn(move || {
+        // Collect pixels matching `current` until we exhaust our maximum run
+        // length, or the pixels change, whichever comes first.
+        let mut run_length = 0;
+        while run_length < 0x7f {
+            // Merely peek at the next pixel, because if it's different, we'll
+            // have to put it back.
+            if let Some(val) = pixels.peek() {
+                // Quantize to 7bpp.
+                let p = val >> 1;
+                // Does it match our current run?
+                if current == Some(p) {
+                    // Count it, drop it, and proceed.
+                    run_length += 1;
+                    pixels.next();
+                } else if run_length > 0 {
+                    // This pixel doesn't match, but we've counted at least one
+                    // pixel that did -- we need to emit it as a run and leave
+                    // this pixel for later. We've already got code for emitting
+                    // a run when our length is exceeded after the loop -- use
+                    // it.
+                    break;
+                } else {
+                    // This pixel doesn't match, but neither did the last one --
+                    // no run is in progress. We can just emit this and start a
+                    // new run.
+                    current = Some(p);
+                    pixels.next();
+                    return Some(p | 0x80u8);
+                }
+            } else {
+                // We've run out of input, but we may have accumulated a run.
+                if run_length > 0 {
+                    break;
+                }
+                return None;
+            };
+        }
+        debug_assert!(run_length > 0);
+        Some(run_length)
     })
 }
 
@@ -539,5 +589,28 @@ mod tests {
         let runs = [(1u8, 42usize), (2, 1), (3, 90)];
         let ri = RunIter::from(runs.iter().cloned());
         assert_eq!(ri.count(), 42 + 1 + 90);
+    }
+
+    #[test]
+    fn encode_rle7a_basic() {
+        // Construct some huge runs by manipulating iterators.
+        let one_thousand_twos = std::iter::repeat(4).take(1000);
+        let a_three = std::iter::once(6);
+        let edge_case = std::iter::repeat(8).take(128);
+        let two_fives = std::iter::repeat(10).take(2);
+        let seq = one_thousand_twos
+            .chain(a_three)
+            .chain(edge_case)
+            .chain(two_fives);
+
+        let encoded = encode_rle7a(seq).collect::<Vec<_>>();
+
+        assert_eq!(
+            encoded,
+            &[
+                0x82, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x7f, 0x6e, 0x83,
+                0x84, 0x7f, 0x85, 0x01,
+            ]
+        );
     }
 }
