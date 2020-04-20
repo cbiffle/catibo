@@ -4,7 +4,6 @@
 use std::error::Error;
 use std::mem::size_of;
 
-use byteorder::{ByteOrder, LittleEndian};
 use catibo::*;
 use structopt::StructOpt;
 use zerocopy::{FromBytes, LayoutVerified, Unaligned};
@@ -94,6 +93,7 @@ fn decode(data: &[u8]) -> Vec<u8> {
     out
 }
 
+#[allow(dead_code)] // occasionally useful
 fn hexdump(data: &[u8]) {
     for line in 0.. {
         let offset = line * 16;

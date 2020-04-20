@@ -46,6 +46,11 @@ pub fn encode_rle7_slice<I>(
     }
 }
 
+/// Encodes an 8bpp slice into RLE7a format.
+///
+/// RLE7a takes pains not to cross half-scanline boundaries, which will be
+/// inferred from the provided `width`. If you would like to violate this rule
+/// to achieve better compression, pass a very, very large `width`.
 pub fn encode_rle7a_slice(
     data: &[u8],
     width: u32,

@@ -39,7 +39,10 @@ pub struct Layout<'a> {
     pub layer_data: Vec<&'a [u8]>,
 }
 
+/// Reference to file headers from `Layout`, which changes shape depending on
+/// which file header format is being used.
 pub enum Headers<'a> {
+    /// File uses the split header.
     Split {
         /// Start of split header.
         header: &'a SplitHeader,
@@ -48,11 +51,13 @@ pub enum Headers<'a> {
         /// Second extended config record.
         ext_config2: &'a ExtConfig2,
     },
+    /// File uses the omniheader.
     Omni(&'a OmniHeader),
 }
 
 /// Unified interface to data common to all header types.
 impl<'a> Headers<'a> {
+    /// File offset of `ImageHeader` for large preview image.
     pub fn large_preview_offset(&self) -> u32 {
         match self {
             Self::Split { header, .. } => header.large_preview_offset.get(),
@@ -60,6 +65,7 @@ impl<'a> Headers<'a> {
         }
     }
 
+    /// File offset of `ImageHeader` for small preview image.
     pub fn small_preview_offset(&self) -> u32 {
         match self {
             Self::Split { header, .. } => header.small_preview_offset.get(),
@@ -67,6 +73,7 @@ impl<'a> Headers<'a> {
         }
     }
 
+    /// File offset of table of `LayerHeader` records.
     pub fn layer_table_offset(&self) -> u32 {
         match self {
             Self::Split { header, .. } => header.layer_table_offset.get(),
@@ -74,6 +81,7 @@ impl<'a> Headers<'a> {
         }
     }
 
+    /// Number of printed layers.
     pub fn layer_table_count(&self) -> u32 {
         match self {
             Self::Split { header, .. } => header.layer_table_count.get(),
@@ -81,6 +89,7 @@ impl<'a> Headers<'a> {
         }
     }
 
+    /// Number of repetitions of printed layers in the layer table.
     pub fn level_set_count(&self) -> u32 {
         match self {
             Self::Split { header, .. } => header.level_set_count.get(),
@@ -88,6 +97,7 @@ impl<'a> Headers<'a> {
         }
     }
 
+    /// Encryption key, or 0 if none.
     pub fn encryption_key(&self) -> u32 {
         match self {
             Self::Split { header, .. } => header.encryption_key.get(),
@@ -95,6 +105,7 @@ impl<'a> Headers<'a> {
         }
     }
 
+    /// Printer resolution in pixels along x, y axes.
     pub fn resolution(&self) -> [u32; 2] {
         match self {
             Self::Split { header, .. } => {
@@ -516,6 +527,7 @@ pub fn decode_multilevel_slice(
     }
 }
 
+/// Decodes an encoded/encrypted image slice in phz format.
 pub fn decode_phz_slice(
     data: &[u8],
     resolution: [u32; 2],
