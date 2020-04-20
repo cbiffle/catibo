@@ -87,6 +87,23 @@ impl<'a> Headers<'a> {
             Self::Omni(header) => header.level_set_count.get(),
         }
     }
+
+    pub fn encryption_key(&self) -> u32 {
+        match self {
+            Self::Split { header, .. } => header.encryption_key.get(),
+            Self::Omni(header) => header.encryption_key.get(),
+        }
+    }
+
+    pub fn resolution(&self) -> [u32; 2] {
+        match self {
+            Self::Split { header, .. } =>
+                [header.resolution[0].get(), header.resolution[1].get()],
+            Self::Omni(header) =>
+                [header.resolution[0].get(), header.resolution[1].get()],
+        }
+
+    }
 }
 
 /// Errors produced by `parse_file`. These only reflect structural issues in the
@@ -476,6 +493,51 @@ pub fn decode_multilevel_slice(
     let mut cursor = data.iter().cloned();
 
     while let Some((level, len)) = rle::decode_rle7(&mut cursor)? {
+        if pixels_remaining < len {
+            return Err(ImageError::TooManyPixels);
+        }
+        pixels_remaining -= len;
+
+        for _ in 0..len {
+            emit(x, y, level);
+            x += 1;
+            if x == rx {
+                x = 0;
+                y += 1;
+            }
+        }
+    }
+
+    if pixels_remaining > 0 {
+        Err(ImageError::TooFewPixels)
+    } else {
+        Ok(())
+    }
+}
+
+pub fn decode_phz_slice(
+    data: &[u8],
+    resolution: [u32; 2],
+    z: u32,
+    key: u32,
+    mut emit: impl FnMut(u64, u64, u8),
+) -> Result<(), ImageError> {
+    // Make a copy of the data so we can decrypt it.
+    let mut data = data.to_vec();
+    // Decrypt if necessary.
+    if key != 0 {
+        crypto::crypt9f(key, z, &mut data);
+    }
+
+    let rx = resolution[0] as u64;
+
+    let (mut x, mut y) = (0, 0);
+    let mut pixels_remaining = (resolution[0] * resolution[1]) as usize;
+    let runs = rle::decode_rle7a(data.iter().cloned());
+
+    for run in runs {
+        let (level, len) = run?;
+
         if pixels_remaining < len {
             return Err(ImageError::TooManyPixels);
         }

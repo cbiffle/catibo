@@ -119,7 +119,7 @@ use zerocopy::{AsBytes, FromBytes, Unaligned};
 
 /// Enumeration of known magic number values. Also punned as a way of indicating
 /// file formats.
-#[derive(Copy, Clone, Debug, FromPrimitive, ToPrimitive)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 #[repr(u32)]
 pub enum Magic {
     /// Indicates the planar level-set format (CBDDLP).
@@ -443,11 +443,11 @@ pub struct OmniHeader {
     pub print_time_s: U32LE,
     pub mirror: U32LE,
     pub level_set_count: U32LE,
-    pub pwm0: U16LE,
-    pub pwm1: U16LE,
+    pub pwm_level: U16LE,
+    pub bot_pwm_level: U16LE,
     pub zeroes_40: [u8; 8],
     pub overall_height_mm: F32LE,
-    pub print_vol_mm: [F32LE; 3],
+    pub printer_out_mm: [F32LE; 3],
     pub encryption_key: U32LE,
     pub bot_light_off_time_s: F32LE,
     pub light_off_time_s: F32LE, // or vice versa, check
@@ -461,9 +461,9 @@ pub struct OmniHeader {
     pub lift_dist_mm: F32LE,
     pub lift_speed_mmpm: F32LE,
     pub retract_speed_mmpm: F32LE,
-    pub vol_ml: F32LE,
-    pub mass_g: F32LE,
-    pub cost: F32LE,
+    pub print_volume_ml: F32LE,
+    pub print_mass_g: F32LE,
+    pub print_price: F32LE,
 
     pub _zero_8c: [u8; 4],
 

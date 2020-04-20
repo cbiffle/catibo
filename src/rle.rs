@@ -5,7 +5,9 @@
 //! unique to the file formats, and so I have had to make up names for them.
 //!
 //! The names are based on the number of bits in each sample of the compressed
-//! data: `RLE1`, `RLE7`, and `RLE15`.
+//! data: `RLE1`, `RLE7`, and `RLE15`. The printer manufacturer screwed this
+//! scheme up a bit by introducing a *second* 7-bit RLE scheme, which I'm
+//! calling `RLE7a`.
 //!
 //! # `RLE1`
 //!
@@ -47,6 +49,29 @@
 //! -- that is, the most significant bits of the encoded run appear in the
 //! *first* byte. This is the only place in the entire file format that uses
 //! big-endian.
+//!
+//! # `RLE7a`
+//!
+//! `RLE7a` encodes 7-bit samples into repeated sections of up to 127 pixels
+//! using an unusual encoding scheme based on repeating previously generated
+//! pixels. Its maximum (best-case) compression ratio is 0.009x, though it
+//! doesn't approach this in practice, and its worst-case inflation is only
+//! 1.14x.
+//!
+//! This scheme is used by recent file format variations including `phz`.
+//!
+//! The encoding works as follows:
+//!
+//! - A byte with the MSB set encodes a pixel in its low 7 bits.
+//! - A byte with the MSB clear encodes a repetition count in its low 7 bits.
+//!
+//! Repetitions simply repeat the last literal pixel that was encoded.
+//! Repetitions can, themselves, be repeated: `0x80 0x7f 0x7f` encodes 254
+//! zero-valued pixels.
+//!
+//! Note that RLE7a is the only scheme described here that is *stateful* -- it's
+//! not enough to simply decode bytes, one must also remember the last pixel
+//! encoded. This causes its API to be pretty different.
 //!
 //! # `RLE15`
 //!
@@ -371,6 +396,29 @@ impl Run7 {
             Run7::R5(bs) => &bs[..],
         }
     }
+}
+
+/// Returns an iterator that yields runs of pixels in the RLE7a scheme until
+/// `bytes` is exhausted.
+pub fn decode_rle7a(
+    mut bytes: impl Iterator<Item = u8>,
+) -> impl Iterator<Item = Result<Run, RleError>>
+{
+    let mut last = None;
+    std::iter::from_fn(move || {
+        let b = bytes.next()?;
+        if b & 0x80 != 0 {
+            // new pixel value
+            last = Some(b << 1);
+            Some(Ok((b << 1, 1)))
+        } else {
+            // run
+            match last {
+                None => Some(Err(RleError::BadRunEncoding)),
+                Some(v) => Some(Ok((v, usize::from(b)))),
+            }
+        }
+    })
 }
 
 /// Equivalent to `Run` for RGB images.

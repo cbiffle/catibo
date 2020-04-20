@@ -128,7 +128,7 @@ impl Builder {
         let encryption_mode = match magic {
             Magic::PlanarLevelSet => 0,
             Magic::Multilevel => 0xF,
-            Magic::PlanarLevelSet2 => unimplemented!(),
+            Magic::PlanarLevelSet2 => 0x1c,
         };
         Self {
             magic,
