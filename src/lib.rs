@@ -445,7 +445,7 @@ pub struct OmniHeader {
     pub level_set_count: U32LE,
     pub pwm_level: U16LE,
     pub bot_pwm_level: U16LE,
-    pub zeroes_40: [u8; 8],
+    pub _zero_40: [u8; 8],
     pub overall_height_mm: F32LE,
     pub printer_out_mm: [F32LE; 3],
     pub encryption_key: U32LE,
