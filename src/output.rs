@@ -149,9 +149,9 @@ impl Builder {
     /// The `version` is, in practice, always 2.
     pub fn for_revision(magic: Magic, version: u32) -> Self {
         let encryption_mode = match magic {
-            Magic::PlanarLevelSet => 0,
-            Magic::Multilevel => 0xF,
-            Magic::PlanarLevelSet2 => 0x1c,
+            Magic::CBDDLP => 0,
+            Magic::CTB => 0xF,
+            Magic::PHZ => 0x1c,
         };
         Self {
             magic,
@@ -423,12 +423,12 @@ impl Builder {
 
         // Seek past file header.
         match self.magic {
-            Magic::Multilevel | Magic::PlanarLevelSet => {
+            Magic::CTB | Magic::CBDDLP => {
                 out.seek(io::SeekFrom::Current(
                     size_of::<SplitHeader>() as i64
                 ))?;
             }
-            Magic::PlanarLevelSet2 => {
+            Magic::PHZ => {
                 out.seek(
                     io::SeekFrom::Current(size_of::<OmniHeader>() as i64),
                 )?;
@@ -447,9 +447,7 @@ impl Builder {
         // extconfigs.
         let after_previews_offset = out.seek(io::SeekFrom::Current(0))?;
 
-        if self.magic == Magic::Multilevel
-            || self.magic == Magic::PlanarLevelSet
-        {
+        if self.magic == Magic::CTB || self.magic == Magic::CBDDLP {
             // Leave a hole.
             let hole = size_of::<ExtConfig>() + size_of::<ExtConfig2>();
             out.seek(io::SeekFrom::Current(hole as i64))?;
@@ -493,9 +491,7 @@ impl Builder {
         }
 
         // Write file header.
-        if self.magic == Magic::Multilevel
-            || self.magic == Magic::PlanarLevelSet
-        {
+        if self.magic == Magic::CTB || self.magic == Magic::CBDDLP {
             // Go back and write extension records.
             out.seek(io::SeekFrom::Start(after_previews_offset))?;
 

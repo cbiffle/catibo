@@ -70,16 +70,16 @@ use num_derive::{FromPrimitive, ToPrimitive};
 use zerocopy::{AsBytes, FromBytes, Unaligned};
 
 /// Enumeration of known magic number values. Also punned as a way of indicating
-/// file formats.
+/// file formats, since that's what magic numbers are for.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, FromPrimitive, ToPrimitive)]
 #[repr(u32)]
 pub enum Magic {
-    /// Indicates the planar level-set format (CBDDLP).
-    PlanarLevelSet = 0x12fd_0019,
-    /// Indicates the multilevel format (CTB).
-    Multilevel = 0x12fd_0086,
-    /// Indicates the PHZ format using an increasingly incorrect name.
-    PlanarLevelSet2 = 0x9fda83ae, // TODO wrong name
+    /// The older 1-bit planar format.
+    CBDDLP = 0x12fd_0019,
+    /// The newer 7-bit chunky encrypted format.
+    CTB = 0x12fd_0086,
+    /// The newer-er other 7-bit chunky encrypted format.
+    PHZ = 0x9fda_83ae,
 }
 
 impl Magic {
@@ -94,17 +94,59 @@ impl Magic {
     /// level-based AA representation, where slices are multiplied.
     pub fn uses_aa_levels(self) -> bool {
         match self {
-            Self::Multilevel => false,
-            Self::PlanarLevelSet | Self::PlanarLevelSet2 => true,
+            Self::CTB => false,
+            Self::CBDDLP | Self::PHZ => true,
         }
     }
 
     /// Which header style does a file with this magic use?
     pub fn header_style(self) -> HeaderStyle {
         match self {
-            Magic::PlanarLevelSet2 => HeaderStyle::Omni,
+            Magic::PHZ => HeaderStyle::Omni,
             _ => HeaderStyle::Split,
         }
+    }
+
+    /// Produces variant names for Clap compatibility, without requiring Clap in
+    /// the library.
+    pub fn variants() -> &'static [&'static str] {
+        &["cbddlp", "ctb", "phz"]
+    }
+
+    /// Which encryption method, if any, do files with this magic use?
+    pub fn encryption(self) -> Option<Cipher> {
+        match self {
+            Self::CTB => Some(Cipher::_86),
+            Self::PHZ => Some(Cipher::_9f),
+            _ => None,
+        }
+    }
+}
+
+/// Parses file extensions to magic numbers.
+impl std::str::FromStr for Magic {
+    type Err = BadMagicNameError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if s.eq_ignore_ascii_case("cbddlp") {
+            return Ok(Self::CBDDLP);
+        } else if s.eq_ignore_ascii_case("ctb") {
+            return Ok(Self::CTB);
+        } else if s.eq_ignore_ascii_case("phz") {
+            return Ok(Self::PHZ);
+        } else {
+            return Err(BadMagicNameError);
+        }
+    }
+}
+
+/// Error used to signal an invalid conversion from a `str` to `Magic`.
+#[derive(Copy, Clone, Debug)]
+pub struct BadMagicNameError;
+
+impl std::fmt::Display for BadMagicNameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("unrecognized file format")
     }
 }
 
@@ -115,6 +157,15 @@ pub enum HeaderStyle {
     Split,
     /// File uses unified omniheader.
     Omni,
+}
+
+/// Names different ciphers when the magic is asked.
+#[derive(Copy, Clone, Debug)]
+pub enum Cipher {
+    /// The "86 cipher" observed in ctb files.
+    _86,
+    /// The "9f cipher" observed in phz files.
+    _9f,
 }
 
 /// Shorthand for little-endian `u32`s.

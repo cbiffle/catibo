@@ -1,45 +1,10 @@
 use std::error::Error;
 
-use clap::arg_enum;
 use num_traits::FromPrimitive;
 use rayon::prelude::*;
 use structopt::StructOpt;
 
-arg_enum! {
-    #[allow(non_camel_case_types)]
-    #[derive(Copy, Clone, Debug, PartialEq)]
-    enum Format {
-        ctb,
-        cbddlp,
-        phz,
-    }
-}
-
-impl Format {
-    fn encryption(self) -> Option<Cipher> {
-        match self {
-            Format::ctb => Some(Cipher::_86),
-            Format::phz => Some(Cipher::_9f),
-            _ => None,
-        }
-    }
-}
-
-impl From<Format> for catibo::Magic {
-    fn from(f: Format) -> Self {
-        match f {
-            Format::ctb => catibo::Magic::Multilevel,
-            Format::cbddlp => catibo::Magic::PlanarLevelSet,
-            Format::phz => catibo::Magic::PlanarLevelSet2,
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug)]
-enum Cipher {
-    _86,
-    _9f,
-}
+use catibo::Magic;
 
 /// Performs format conversions for supported 3D volumetric file types.
 #[derive(StructOpt, Debug)]
@@ -57,9 +22,10 @@ struct Args {
     /// If omitted, the format is guessed from the file extension. The format
     /// must be provided explicitly if the output file does not have an
     /// extension, or if the extension is non-standard.
-    #[structopt(short = "O", long, possible_values = &Format::variants(),
+    #[structopt(short = "O", long,
+        possible_values = Magic::variants(),
         case_insensitive = true)]
-    output_format: Option<Format>,
+    output_format: Option<Magic>,
     /// File to read.
     #[structopt(parse(from_os_str))]
     input: std::path::PathBuf,
@@ -85,8 +51,6 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let input_image = std::fs::read(&args.input)?;
     let parsed = catibo::input::parse_file(&input_image)?;
 
-    let output_magic = catibo::Magic::from(output_format);
-
     // If we're going CBDDLP <-> CTB, we need to recompress the layers and
     // potentially introduce or eliminate the bonkers antialiasing scheme.
     //
@@ -109,7 +73,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // provided.
     let out_key = args.key.unwrap_or_else(|| hdr.encryption_key());
 
-    let mut outb = catibo::output::Builder::for_revision(output_magic, 2);
+    let mut outb = catibo::output::Builder::for_revision(output_format, 2);
 
     let resolution = hdr.resolution();
     // Copy over unmodified print parameters.
@@ -185,7 +149,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // We'll just force the level set count to 1, because we currently don't
     // support antialiased cbddlp output.
     outb.level_set_count(1);
-    if output_format == Format::cbddlp {
+    if output_format == Magic::CBDDLP {
         outb.aa_levels(1);
     }
 
@@ -209,7 +173,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
             let uncompressed = &chunky_layer_data[i];
             let cvt_data = match output_format {
-                Format::ctb => {
+                Magic::CTB => {
                     let mut compressed =
                         Vec::with_capacity(parsed.layer_data[i].len());
                     catibo::output::encode_rle7_slice(
@@ -221,7 +185,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
                     compressed
                 }
-                Format::cbddlp => {
+                Magic::CBDDLP => {
                     let mut compressed = Vec::with_capacity(uncompressed.len());
                     let mut iter = uncompressed.iter().cloned().peekable();
                     while let Some(rle) =
@@ -232,7 +196,7 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
                     compressed
                 }
-                Format::phz => {
+                Magic::PHZ => {
                     let mut compressed =
                         Vec::with_capacity(parsed.layer_data[i].len());
                     catibo::output::encode_rle7a_slice(
@@ -264,21 +228,21 @@ fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     Ok(())
 }
 
-fn format_from_ext(ext: &str) -> Option<Format> {
+fn format_from_ext(ext: &str) -> Option<Magic> {
     use std::str::FromStr;
 
-    Format::from_str(ext).ok()
+    Magic::from_str(ext).ok()
 }
 
 fn decompress_all_layers(
     parsed: &catibo::input::Layout<'_>,
 ) -> Result<Vec<Vec<u8>>, Box<dyn Error + Sync + Send>> {
-    let magic = catibo::Magic::from_u32(parsed.magic.magic.get()).unwrap();
+    let magic = Magic::from_u32(parsed.magic.magic.get()).unwrap();
     let [width, height] = parsed.header.resolution();
     let per_level_layer_count = parsed.header.layer_table_count() as usize;
 
     match magic {
-        catibo::Magic::PlanarLevelSet => (0..per_level_layer_count)
+        Magic::CBDDLP => (0..per_level_layer_count)
             .into_par_iter()
             .map(|i| {
                 let stack = parsed.layer_data[i..]
@@ -299,7 +263,7 @@ fn decompress_all_layers(
                 Ok(data)
             })
             .collect::<Result<Vec<_>, _>>(),
-        catibo::Magic::Multilevel => (0..per_level_layer_count)
+        Magic::CTB => (0..per_level_layer_count)
             .into_par_iter()
             .map(|i| {
                 let mut uncompressed =
@@ -314,7 +278,7 @@ fn decompress_all_layers(
                 Ok(uncompressed)
             })
             .collect::<Result<Vec<_>, _>>(),
-        catibo::Magic::PlanarLevelSet2 => (0..per_level_layer_count)
+        Magic::PHZ => (0..per_level_layer_count)
             .into_par_iter()
             .map(|i| {
                 let mut uncompressed =
