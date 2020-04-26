@@ -525,7 +525,7 @@ impl Builder {
 
                 layer_table_offset: U32LE::new(layer_table_offset),
                 layer_table_count: U32LE::new(
-                    self.layers.len() as u32 / self.aa_levels,
+                    self.layers.len() as u32 / self.level_set_count,
                 ),
 
                 printer_out_mm: self.printer_out_mm,
