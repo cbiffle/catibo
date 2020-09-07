@@ -116,6 +116,30 @@ impl<'a> Headers<'a> {
             }
         }
     }
+
+    /// Printer output volume in mm.
+    pub fn volume(&self) -> [f32; 3] {
+        match self {
+            Self::Split { header, .. } => [
+                header.printer_out_mm[0].get(),
+                header.printer_out_mm[1].get(),
+                header.printer_out_mm[2].get(),
+            ],
+            Self::Omni(header) => [
+                header.printer_out_mm[0].get(),
+                header.printer_out_mm[1].get(),
+                header.printer_out_mm[2].get(),
+            ],
+        }
+    }
+
+    /// Layer height in millimeters.
+    pub fn layer_height_mm(&self) -> f32 {
+        match self {
+            Self::Split { header, .. } => header.layer_height_mm.get(),
+            Self::Omni(header) => header.layer_height_mm.get(),
+        }
+    }
 }
 
 /// Errors produced by `parse_file`. These only reflect structural issues in the
