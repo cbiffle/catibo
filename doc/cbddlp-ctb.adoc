@@ -214,7 +214,7 @@ appears in *both* the file header and `ExtConfig`.
 `bot_layer_count` (`u32`): number of layers configured as "bottom." Note that
 this field appears in *both* the file header and `ExtConfig`.
 
-`resolution.{x,y}` (`f32`): printer resolution along X/Y axes, in pixels. This
+`resolution.{x,y}` (`u32`): printer resolution along X/Y axes, in pixels. This
 information is critical to correctly decoding layer images.
 
 `large_preview_offset` / `small_preview_offset` (`u32`): file offsets of
